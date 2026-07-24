@@ -29,16 +29,24 @@ lectonautas/
 
 ## Levantar el entorno
 
+**Windows / PowerShell**
+
 ```powershell
 Copy-Item .env.example .env
 docker compose up -d --build
 ```
 
-El primer comando solo hace falta la primera vez; en Linux o macOS su equivalente
-es `cp .env.example .env`. `.env.example` trae valores por defecto que funcionan en
-local, y las migraciones de la base de datos **se aplican solas** al arrancar con el
-servicio `users-migrate`, así que no hay pasos manuales. Cuando los contenedores
-estén arriba, la API queda en `http://localhost:8080`.
+**Linux / macOS**
+
+```bash
+cp .env.example .env
+docker compose up -d --build
+```
+
+El primer comando solo hace falta la primera vez. `.env.example` trae valores por
+defecto que funcionan en local, y las migraciones de la base de datos **se aplican
+solas** al arrancar con el servicio `users-migrate`, así que no hay pasos manuales.
+Cuando los contenedores estén arriba, la API queda en `http://localhost:8080`.
 
 Servicios y puertos:
 
