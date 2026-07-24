@@ -1,0 +1,103 @@
+# Las variables se leen del .env de la raíz (ver .env.example).
+# Cada servicio recibe solo las que necesita, con el nombre que espera su
+# código (DATABASE_URL, GRPC_PORT, ...); la interpolación de abajo es la que
+# traduce las variables globales prefijadas a esos nombres.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${USERS_SERVICE_DB}
+    ports:
+      - "${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${USERS_SERVICE_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Aplica las migraciones del users-service antes de que el servicio arranque.
+  # Es idempotente (CREATE ... IF NOT EXISTS), asi que correrlo en cada arranque
+  # es seguro y ademas cubre el caso de volumen recien creado (tras down -v).
+  # Corre los *.up.sql en orden y termina; users-service espera a que termine ok.
+  users-migrate:
+    image: postgres:16-alpine
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: ${USERS_SERVICE_DB}
+    volumes:
+      - ./backend/microservices/users-service/migrations:/migrations:ro
+    entrypoint: ["sh", "-c"]
+    # $$ escapa la interpolacion de compose: el $ literal es para el shell.
+    command:
+      - |
+        set -e
+        for f in $$(ls /migrations/*.up.sql | sort); do
+          echo "Aplicando $$f"
+          psql -v ON_ERROR_STOP=1 -f "$$f"
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  users-service:
+    build:
+      context: ./backend/microservices/users-service
+    environment:
+      GRPC_PORT: ${USERS_SERVICE_GRPC_PORT}
+      # Dentro de la red del compose Postgres siempre escucha en 5432
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${USERS_SERVICE_DB}?sslmode=disable
+      # Valkey, compartido con el ratelimit-service, para el cache de sesiones
+      REDIS_ADDR: valkey:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+      users-migrate:
+        condition: service_completed_successfully
+
+  valkey:
+    image: valkey/valkey:8-alpine
+    ports:
+      - "${VALKEY_PORT}:6379"
+
+  ratelimit:
+    image: envoyproxy/ratelimit:master
+    command: ["/bin/ratelimit"]
+    environment:
+      USE_STATSD: "false"
+      LOG_LEVEL: info
+      REDIS_SOCKET_TYPE: tcp
+      REDIS_URL: valkey:6379
+      RUNTIME_ROOT: /data
+      RUNTIME_SUBDIRECTORY: ratelimit
+      RUNTIME_WATCH_ROOT: "false"
+      RUNTIME_IGNOREDOTFILES: "true"
+    volumes:
+      - ./gateway/ratelimit/config:/data/ratelimit/config:ro
+    depends_on:
+      - valkey
+    ports:
+      - "${RATELIMIT_PORT}:8081"
+
+  gateway:
+    image: envoyproxy/envoy:v1.31-latest
+    volumes:
+      - ./gateway/envoy.yaml:/etc/envoy/envoy.yaml:ro
+      - ./gateway/proto/users_service.pb:/etc/envoy/proto/users_service.pb:ro
+    depends_on:
+      - users-service
+      - ratelimit
+    ports:
+      - "${GATEWAY_HTTP_PORT}:8080"
+      - "${GATEWAY_ADMIN_PORT}:9901"
+
+volumes:
+  postgres_data:

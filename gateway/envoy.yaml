@@ -1,0 +1,137 @@
+admin:
+  address:
+    socket_address: { address: 0.0.0.0, port_value: 9901 }
+
+static_resources:
+  listeners:
+    - name: public_http
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 8080 }
+      filter_chains:
+        - filters:
+            - name: envoy.filters.network.http_connection_manager
+              typed_config:
+                "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                stat_prefix: gateway
+                codec_type: AUTO
+                route_config:
+                  name: local_route
+                  virtual_hosts:
+                    - name: backend
+                      domains: ["*"]
+                      # Política CORS aplicada a todas las rutas de este vhost;
+                      # el filtro envoy.filters.http.cors de abajo es el que la hace cumplir.
+                      cors:
+                        allow_origin_string_match:
+                          - safe_regex:
+                              regex: ".*"
+                        allow_methods: "GET, POST, PUT, PATCH, DELETE, OPTIONS"
+                        allow_headers: "content-type,authorization,x-requested-with"
+                        max_age: "1728000"
+                      routes:
+                        # Los filtros cors y ratelimit resuelven la ruta ANTES de
+                        # que grpc_json_transcoder reescriba :path a la forma gRPC
+                        # (corren antes que él en la cadena), así que ven siempre
+                        # el path REST original. Por eso esta ruta cubre tanto el
+                        # preflight OPTIONS como las llamadas reales, y es aquí
+                        # donde va el rate limiting (habla con el ratelimit-service,
+                        # que guarda los contadores en Valkey).
+                        - match: { prefix: "/v1/users" }
+                          route:
+                            cluster: users_service
+                            rate_limits:
+                              - actions:
+                                  - remote_address: {}
+                        # Endpoints de autenticacion (login / me / logout).
+                        - match: { prefix: "/v1/auth" }
+                          route:
+                            cluster: users_service
+                            rate_limits:
+                              - actions:
+                                  - remote_address: {}
+                        # El transcoder sí invalida el caché de ruta tras reescribir
+                        # el path, así que el router vuelve a resolver — esta vez
+                        # contra el path gRPC ya transcodificado.
+                        - match: { prefix: "/users.v1.UsersService/" }
+                          route:
+                            cluster: users_service
+                            timeout: 15s
+                http_filters:
+                  - name: envoy.filters.http.cors
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.cors.v3.Cors
+                  - name: envoy.filters.http.ratelimit
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.ratelimit.v3.RateLimit
+                      domain: gateway
+                      failure_mode_deny: false
+                      timeout: 0.5s
+                      rate_limit_service:
+                        transport_api_version: V3
+                        grpc_service:
+                          envoy_grpc:
+                            cluster_name: ratelimit_service
+                  # Va antes del transcoder en la cadena de request, así que en
+                  # la de response corre DESPUÉS de él — que es cuando agrega
+                  # grpc-status/grpc-message a la respuesta ya transcodificada.
+                  # convert_grpc_status solo los limpia en el camino de error;
+                  # esto los saca también cuando el status gRPC es OK.
+                  - name: envoy.filters.http.header_mutation
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.header_mutation.v3.HeaderMutation
+                      mutations:
+                        response_mutations:
+                          - remove: "grpc-status"
+                          - remove: "grpc-message"
+                  - name: envoy.filters.http.grpc_json_transcoder
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.grpc_json_transcoder.v3.GrpcJsonTranscoder
+                      proto_descriptor: "/etc/envoy/proto/users_service.pb"
+                      services: ["users.v1.UsersService"]
+                      # Sin esto, el status y mensaje gRPC quedan como headers
+                      # crudos (grpc-status/grpc-message) en la respuesta HTTP;
+                      # con esto, el transcoder los traduce a un status HTTP real
+                      # (y a un body de error JSON estándar si algo falla).
+                      convert_grpc_status: true
+                      print_options:
+                        add_whitespace: true
+                        always_print_primitive_fields: true
+                        preserve_proto_field_names: false
+                  - name: envoy.filters.http.router
+                    typed_config:
+                      "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+
+  clusters:
+    - name: users_service
+      connect_timeout: 2s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: users_service
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: users-service, port_value: 50051 }
+
+    - name: ratelimit_service
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: ratelimit_service
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: ratelimit, port_value: 8081 }

@@ -1,0 +1,15 @@
+# Variables de entorno reales (la plantilla versionada es .env.example)
+.env
+*.env
+!.env.example
+
+# Binarios y logs
+bin/
+*.log
+
+# Configuración local de Claude Code
+.claude
+CLAUDE.md
+
+# Collección Postman
+lectonautas.postman_collection.json
