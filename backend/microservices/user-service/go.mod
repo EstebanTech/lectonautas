@@ -1,4 +1,4 @@
-module github.com/estebandeveloper20/lectonautas/backend/microservices/users-service
+module github.com/estebandeveloper20/lectonautas/backend/microservices/user-service
 
 go 1.24
 

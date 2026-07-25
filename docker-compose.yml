@@ -8,30 +8,30 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${USERS_SERVICE_DB}
+      POSTGRES_DB: ${USER_SERVICE_DB}
     ports:
       - "${POSTGRES_PORT}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${USERS_SERVICE_DB}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${USER_SERVICE_DB}"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  # Aplica las migraciones del users-service antes de que el servicio arranque.
+  # Aplica las migraciones del user-service antes de que el servicio arranque.
   # Es idempotente (CREATE ... IF NOT EXISTS), asi que correrlo en cada arranque
   # es seguro y ademas cubre el caso de volumen recien creado (tras down -v).
-  # Corre los *.up.sql en orden y termina; users-service espera a que termine ok.
-  users-migrate:
+  # Corre los *.up.sql en orden y termina; user-service espera a que termine ok.
+  user-migrate:
     image: postgres:16-alpine
     environment:
       PGHOST: postgres
       PGUSER: ${POSTGRES_USER}
       PGPASSWORD: ${POSTGRES_PASSWORD}
-      PGDATABASE: ${USERS_SERVICE_DB}
+      PGDATABASE: ${USER_SERVICE_DB}
     volumes:
-      - ./backend/microservices/users-service/migrations:/migrations:ro
+      - ./backend/microservices/user-service/migrations:/migrations:ro
     entrypoint: ["sh", "-c"]
     # $$ escapa la interpolacion de compose: el $ literal es para el shell.
     command:
@@ -46,13 +46,13 @@ services:
         condition: service_healthy
     restart: "no"
 
-  users-service:
+  user-service:
     build:
-      context: ./backend/microservices/users-service
+      context: ./backend/microservices/user-service
     environment:
-      GRPC_PORT: ${USERS_SERVICE_GRPC_PORT}
+      GRPC_PORT: ${USER_SERVICE_GRPC_PORT}
       # Dentro de la red del compose Postgres siempre escucha en 5432
-      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${USERS_SERVICE_DB}?sslmode=disable
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${USER_SERVICE_DB}?sslmode=disable
       # Valkey, compartido con el ratelimit-service, para el cache de sesiones
       REDIS_ADDR: valkey:6379
     depends_on:
@@ -60,7 +60,7 @@ services:
         condition: service_healthy
       valkey:
         condition: service_started
-      users-migrate:
+      user-migrate:
         condition: service_completed_successfully
 
   valkey:
@@ -91,9 +91,9 @@ services:
     image: envoyproxy/envoy:v1.31-latest
     volumes:
       - ./gateway/envoy.yaml:/etc/envoy/envoy.yaml:ro
-      - ./gateway/proto/users_service.pb:/etc/envoy/proto/users_service.pb:ro
+      - ./gateway/proto/user_service.pb:/etc/envoy/proto/user_service.pb:ro
     depends_on:
-      - users-service
+      - user-service
       - ratelimit
     ports:
       - "${GATEWAY_HTTP_PORT}:8080"

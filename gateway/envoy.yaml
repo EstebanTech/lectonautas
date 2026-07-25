@@ -38,23 +38,23 @@ static_resources:
                         # que guarda los contadores en Valkey).
                         - match: { prefix: "/v1/users" }
                           route:
-                            cluster: users_service
+                            cluster: user_service
                             rate_limits:
                               - actions:
                                   - remote_address: {}
                         # Endpoints de autenticacion (login / me / logout).
                         - match: { prefix: "/v1/auth" }
                           route:
-                            cluster: users_service
+                            cluster: user_service
                             rate_limits:
                               - actions:
                                   - remote_address: {}
                         # El transcoder sí invalida el caché de ruta tras reescribir
                         # el path, así que el router vuelve a resolver — esta vez
                         # contra el path gRPC ya transcodificado.
-                        - match: { prefix: "/users.v1.UsersService/" }
+                        - match: { prefix: "/user.v1.UserService/" }
                           route:
-                            cluster: users_service
+                            cluster: user_service
                             timeout: 15s
                 http_filters:
                   - name: envoy.filters.http.cors
@@ -86,8 +86,8 @@ static_resources:
                   - name: envoy.filters.http.grpc_json_transcoder
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.grpc_json_transcoder.v3.GrpcJsonTranscoder
-                      proto_descriptor: "/etc/envoy/proto/users_service.pb"
-                      services: ["users.v1.UsersService"]
+                      proto_descriptor: "/etc/envoy/proto/user_service.pb"
+                      services: ["user.v1.UserService"]
                       # Sin esto, el status y mensaje gRPC quedan como headers
                       # crudos (grpc-status/grpc-message) en la respuesta HTTP;
                       # con esto, el transcoder los traduce a un status HTTP real
@@ -102,7 +102,7 @@ static_resources:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
 
   clusters:
-    - name: users_service
+    - name: user_service
       connect_timeout: 2s
       type: STRICT_DNS
       lb_policy: ROUND_ROBIN
@@ -112,12 +112,12 @@ static_resources:
           explicit_http_config:
             http2_protocol_options: {}
       load_assignment:
-        cluster_name: users_service
+        cluster_name: user_service
         endpoints:
           - lb_endpoints:
               - endpoint:
                   address:
-                    socket_address: { address: users-service, port_value: 50051 }
+                    socket_address: { address: user-service, port_value: 50051 }
 
     - name: ratelimit_service
       connect_timeout: 1s

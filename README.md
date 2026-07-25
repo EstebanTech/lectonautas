@@ -44,8 +44,8 @@ al cliente y lo traduce a gRPC.
 
 ```
 lectonautas/
-├── backend/microservices/users-service/   # Servicio de usuarios en Go + gRPC
-├── gateway/                                # Config de Envoy y rate limiting
+├── backend/microservices/user-service/   # Servicio de usuarios en Go + gRPC
+├── gateway/                              # Config de Envoy y rate limiting
 └── docker-compose.yml
 ```
 
@@ -72,7 +72,7 @@ docker compose up -d --build
 
 El primer comando solo hace falta la primera vez. `.env.example` trae valores por
 defecto que funcionan en local, y las migraciones de la base de datos **se aplican
-solas** al arrancar con el servicio `users-migrate`, así que no hay pasos manuales.
+solas** al arrancar con el servicio `user-migrate`, así que no hay pasos manuales.
 Cuando los contenedores estén arriba, la API queda en `http://localhost:8080`.
 
 Servicios y puertos:
@@ -82,7 +82,7 @@ Servicios y puertos:
 - PostgreSQL: `:5433`
 - Valkey: `:6379`
 
-## API HTTP — users-service
+## API HTTP — user-service
 
 | Método | Ruta | Acción |
 |---|---|---|
@@ -90,7 +90,7 @@ Servicios y puertos:
 | `GET` | `/v1/users/{id}` | Obtener usuario |
 | `PATCH` | `/v1/users/{id}` | Actualizar usuario |
 | `DELETE` | `/v1/users/{id}` | Eliminar usuario |
-| `GET` | `/v1/users` | Listar usuarios |
+| `GET` | `/v1/users` | Obtener todos los usuarios |
 | `POST` | `/v1/auth/login` | Login: devuelve un token de sesión |
 | `GET` | `/v1/auth/me` | Usuario del token enviado en el header `Authorization: Bearer` |
 | `POST` | `/v1/auth/logout` | Cierra la sesión del token |
@@ -105,6 +105,6 @@ con el tiempo restante, siguiendo un patrón cache-aside.
 
 ## Estado
 
-- `users-service`: CRUD de usuarios más login y sesiones con tabla `session` y
+- `user-service`: CRUD de usuarios más login y sesiones con tabla `session` y
   Valkey. Pendiente: tests.
 - Gateway probado end-to-end: transcoding, CORS y rate limiting a 80 req/min por IP.

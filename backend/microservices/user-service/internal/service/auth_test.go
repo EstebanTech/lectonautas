@@ -9,10 +9,10 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/cache"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/domain"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/repository"
-	usersv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/proto/users/v1"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/cache"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/domain"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/repository"
+	userv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/proto/user/v1"
 )
 
 // stubSessionRepo permite forzar el error que devuelve Revoke sin tocar la BD.
@@ -42,7 +42,8 @@ func ctxConToken() context.Context {
 // Valkey no existe en el test; el puerto 1 da "connection refused" al instante y
 // el Logout ignora ese error de cache, que es justo lo que queremos ejercitar.
 func newTestService(sessions repository.SessionRepository) *UserService {
-	return NewUserService(nil, sessions, cache.NewSessionCache("127.0.0.1:1"))
+	valkey := cache.NewClient("127.0.0.1:1")
+	return NewUserService(nil, sessions, cache.NewSessionCache(valkey), cache.NewUserCache(valkey))
 }
 
 // Caso del reporte: token sin sesion activa. Debe ser Unauthenticated (401 en el
@@ -50,7 +51,7 @@ func newTestService(sessions repository.SessionRepository) *UserService {
 func TestLogout_SessionAlreadyClosed(t *testing.T) {
 	svc := newTestService(&stubSessionRepo{revokeErr: repository.ErrSessionNotFound})
 
-	_, err := svc.Logout(ctxConToken(), &usersv1.LogoutRequest{})
+	_, err := svc.Logout(ctxConToken(), &userv1.LogoutRequest{})
 
 	if code := status.Code(err); code != codes.Unauthenticated {
 		t.Fatalf("esperaba Unauthenticated, obtuve %s (err=%v)", code, err)
@@ -61,7 +62,7 @@ func TestLogout_SessionAlreadyClosed(t *testing.T) {
 func TestLogout_DBError(t *testing.T) {
 	svc := newTestService(&stubSessionRepo{revokeErr: context.DeadlineExceeded})
 
-	_, err := svc.Logout(ctxConToken(), &usersv1.LogoutRequest{})
+	_, err := svc.Logout(ctxConToken(), &userv1.LogoutRequest{})
 
 	if code := status.Code(err); code != codes.Internal {
 		t.Fatalf("esperaba Internal, obtuve %s (err=%v)", code, err)
@@ -72,7 +73,7 @@ func TestLogout_DBError(t *testing.T) {
 func TestLogout_Success(t *testing.T) {
 	svc := newTestService(&stubSessionRepo{revokeErr: nil})
 
-	resp, err := svc.Logout(ctxConToken(), &usersv1.LogoutRequest{})
+	resp, err := svc.Logout(ctxConToken(), &userv1.LogoutRequest{})
 
 	if err != nil {
 		t.Fatalf("no esperaba error, obtuve %v", err)

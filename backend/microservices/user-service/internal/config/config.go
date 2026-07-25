@@ -16,13 +16,13 @@ type Config struct {
 // variables prefijadas del .env global de la raíz del monorepo.
 func Load() (*Config, error) {
 	cfg := &Config{
-		GRPCPort:    firstNonEmpty(os.Getenv("GRPC_PORT"), os.Getenv("USERS_SERVICE_GRPC_PORT"), "50051"),
-		DatabaseURL: firstNonEmpty(os.Getenv("DATABASE_URL"), os.Getenv("USERS_SERVICE_DATABASE_URL")),
-		RedisAddr:   firstNonEmpty(os.Getenv("REDIS_ADDR"), os.Getenv("USERS_SERVICE_REDIS_ADDR"), "localhost:6379"),
+		GRPCPort:    firstNonEmpty(os.Getenv("GRPC_PORT"), os.Getenv("USER_SERVICE_GRPC_PORT"), "50051"),
+		DatabaseURL: firstNonEmpty(os.Getenv("DATABASE_URL"), os.Getenv("USER_SERVICE_DATABASE_URL")),
+		RedisAddr:   firstNonEmpty(os.Getenv("REDIS_ADDR"), os.Getenv("USER_SERVICE_REDIS_ADDR"), "localhost:6379"),
 	}
 
 	if cfg.DatabaseURL == "" {
-		return nil, fmt.Errorf("DATABASE_URL (or USERS_SERVICE_DATABASE_URL) is required")
+		return nil, fmt.Errorf("DATABASE_URL (or USER_SERVICE_DATABASE_URL) is required")
 	}
 
 	return cfg, nil

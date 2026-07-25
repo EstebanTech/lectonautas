@@ -9,12 +9,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/cache"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/config"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/database"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/repository"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/server"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/service"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/cache"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/config"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/database"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/repository"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/server"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/service"
 )
 
 func main() {
@@ -35,18 +35,21 @@ func main() {
 	}
 	defer pool.Close()
 
-	sessionCache := cache.NewSessionCache(cfg.RedisAddr)
-	defer sessionCache.Close()
+	valkey := cache.NewClient(cfg.RedisAddr)
+	defer valkey.Close()
 
 	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	if err := sessionCache.Ping(pingCtx); err != nil {
+	if err := valkey.Ping(pingCtx); err != nil {
 		log.Fatalf("failed to connect to valkey (%s): %v", cfg.RedisAddr, err)
 	}
 
+	sessionCache := cache.NewSessionCache(valkey)
+	userCache := cache.NewUserCache(valkey)
+
 	userRepo := repository.NewPostgresUserRepository(pool)
 	sessionRepo := repository.NewPostgresSessionRepository(pool)
-	userService := service.NewUserService(userRepo, sessionRepo, sessionCache)
+	userService := service.NewUserService(userRepo, sessionRepo, sessionCache, userCache)
 	grpcServer := server.NewGRPCServer(userService)
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
@@ -55,7 +58,7 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("users-service gRPC server listening on :%s", cfg.GRPCPort)
+		log.Printf("user-service gRPC server listening on :%s", cfg.GRPCPort)
 		if err := grpcServer.Serve(lis); err != nil {
 			log.Fatalf("failed to serve: %v", err)
 		}

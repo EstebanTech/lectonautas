@@ -12,21 +12,41 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/cache"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/domain"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/repository"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/token"
-	usersv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/proto/users/v1"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/cache"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/domain"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/repository"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/token"
+	userv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/proto/user/v1"
 )
 
-// sessionTTL es cuanto vive una sesion: 2h en Valkey y la misma ventana en la
-// BD (expires_at).
-const sessionTTL = 2 * time.Hour
+const (
+	// sessionTTL es cuanto vive la sesion como tal: un ano en la BD
+	// (expires_at). Es la ventana real en la que el token sigue siendo valido.
+	sessionTTL = 365 * 24 * time.Hour
+
+	// sessionCacheTTL es cuanto vive la entrada de sesion en Valkey. Es solo
+	// cache: cuando expira, el siguiente acceso cae a la BD y repuebla. No
+	// acorta la sesion ni cambia lo que hay en Postgres. Es mas largo que el
+	// TTL de los datos de usuario porque una sesion no cambia sola: solo la
+	// mueve un logout, y ese ya borra la clave explicitamente.
+	sessionCacheTTL = 2 * time.Hour
+)
+
+// sessionCacheTTLFor acota el TTL de cache al tiempo que le quede a la sesion,
+// para no dejar en Valkey una entrada que sobreviva a su propio expires_at.
+func sessionCacheTTLFor(expiresAt time.Time) time.Duration {
+	remaining := time.Until(expiresAt)
+	if remaining < sessionCacheTTL {
+		return remaining
+	}
+	return sessionCacheTTL
+}
 
 // Login verifica email + password y, si son validos, crea una sesion: genera un
-// token aleatorio, guarda su hash en la BD y en Valkey (TTL 2h) y devuelve el
-// token en crudo (unica vez que el cliente lo ve).
-func (s *UserService) Login(ctx context.Context, req *usersv1.LoginRequest) (*usersv1.LoginResponse, error) {
+// token aleatorio, guarda su hash en la BD (vigente por sessionTTL) y lo cachea
+// en Valkey (sessionCacheTTL), y devuelve el token en crudo (unica vez que el
+// cliente lo ve).
+func (s *UserService) Login(ctx context.Context, req *userv1.LoginRequest) (*userv1.LoginResponse, error) {
 	email, err := normalizeEmail(req.GetEmail())
 	if err != nil {
 		return nil, err
@@ -65,32 +85,32 @@ func (s *UserService) Login(ctx context.Context, req *usersv1.LoginRequest) (*us
 	if err := s.sessions.Create(ctx, sess); err != nil {
 		return nil, status.Error(codes.Internal, "failed to create session")
 	}
-	if err := s.cache.Set(ctx, hash, user.ID, sessionTTL); err != nil {
+	if err := s.cache.Set(ctx, hash, user.ID, sessionCacheTTLFor(sess.ExpiresAt)); err != nil {
 		// No es fatal: la sesion ya vive en la BD y se repuebla en el proximo acceso.
 		log.Printf("session cache set failed: %v", err)
 	}
 
 	user.Password = ""
-	return &usersv1.LoginResponse{Token: raw, User: toProto(user)}, nil
+	return &userv1.LoginResponse{Token: raw, User: toProto(user)}, nil
 }
 
 // GetCurrentUser devuelve el usuario dueno del token del header Authorization.
-func (s *UserService) GetCurrentUser(ctx context.Context, _ *usersv1.GetCurrentUserRequest) (*usersv1.UserResponse, error) {
+func (s *UserService) GetCurrentUser(ctx context.Context, _ *userv1.GetCurrentUserRequest) (*userv1.UserResponse, error) {
 	userID, err := s.authenticate(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	u, err := s.repo.GetByID(ctx, userID)
+	u, err := s.userByID(ctx, userID)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to get user")
+		return nil, err
 	}
-	return &usersv1.UserResponse{User: toProto(u)}, nil
+	return &userv1.UserResponse{User: toProto(u)}, nil
 }
 
 // Logout revoca la sesion del token del header Authorization (en la BD) y la
 // borra de Valkey.
-func (s *UserService) Logout(ctx context.Context, _ *usersv1.LogoutRequest) (*usersv1.LogoutResponse, error) {
+func (s *UserService) Logout(ctx context.Context, _ *userv1.LogoutRequest) (*userv1.LogoutResponse, error) {
 	raw, err := bearerToken(ctx)
 	if err != nil {
 		return nil, err
@@ -112,7 +132,7 @@ func (s *UserService) Logout(ctx context.Context, _ *usersv1.LogoutRequest) (*us
 		log.Printf("logout revoke failed: %v", err)
 		return nil, status.Error(codes.Internal, "failed to logout")
 	}
-	return &usersv1.LogoutResponse{Success: true}, nil
+	return &userv1.LogoutResponse{Success: true}, nil
 }
 
 // authenticate es el flujo cache-aside: hashea el token del header, lo busca en
@@ -144,8 +164,9 @@ func (s *UserService) authenticate(ctx context.Context) (string, error) {
 		return "", status.Error(codes.Internal, "failed to validate session")
 	}
 
-	// 3) Repoblar Valkey con el tiempo que le quede a la sesion.
-	if ttl := time.Until(sess.ExpiresAt); ttl > 0 {
+	// 3) Repoblar Valkey por otra ventana de cache (o menos, si a la sesion le
+	// queda menos que eso).
+	if ttl := sessionCacheTTLFor(sess.ExpiresAt); ttl > 0 {
 		if err := s.cache.Set(ctx, hash, sess.UserID, ttl); err != nil {
 			log.Printf("session cache set failed: %v", err)
 		}

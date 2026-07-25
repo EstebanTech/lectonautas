@@ -10,7 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/domain"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/domain"
 )
 
 var (
@@ -29,7 +29,7 @@ type UserRepository interface {
 	GetByEmailForAuth(ctx context.Context, email string) (*domain.User, error)
 	Update(ctx context.Context, upd *domain.UserUpdate) (*domain.User, error)
 	Delete(ctx context.Context, id string) error
-	List(ctx context.Context, limit, offset int32) ([]*domain.User, int32, error)
+	GetAll(ctx context.Context) ([]*domain.User, error)
 }
 
 type PostgresUserRepository struct {
@@ -128,37 +128,34 @@ func (r *PostgresUserRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-func (r *PostgresUserRepository) List(ctx context.Context, limit, offset int32) ([]*domain.User, int32, error) {
+// GetAll devuelve todos los usuarios, sin paginacion ni filtros: tambien vienen
+// los inactivos. Ya no hace falta un count aparte porque el total es cuantas
+// filas se trajeron.
+func (r *PostgresUserRepository) GetAll(ctx context.Context) ([]*domain.User, error) {
 	const query = `
 		SELECT ` + userColumns + `
 		FROM users
-		ORDER BY created_at DESC
-		LIMIT $1 OFFSET $2`
+		ORDER BY created_at DESC`
 
-	rows, err := r.pool.Query(ctx, query, limit, offset)
+	rows, err := r.pool.Query(ctx, query)
 	if err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 	defer rows.Close()
 
-	var users []*domain.User
+	users := make([]*domain.User, 0)
 	for rows.Next() {
 		u, err := scanUser(rows)
 		if err != nil {
-			return nil, 0, err
+			return nil, err
 		}
 		users = append(users, u)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
-	var total int32
-	if err := r.pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&total); err != nil {
-		return nil, 0, err
-	}
-
-	return users, total, nil
+	return users, nil
 }
 
 // scanner cubre tanto pgx.Row (QueryRow) como pgx.Rows (Query), que exponen

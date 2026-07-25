@@ -10,17 +10,17 @@ import (
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 
-	usersv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/proto/users/v1"
+	userv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/proto/user/v1"
 )
 
-func NewGRPCServer(userService usersv1.UsersServiceServer) *grpc.Server {
+func NewGRPCServer(userService userv1.UserServiceServer) *grpc.Server {
 	s := grpc.NewServer(
 		// recovery va primero para envolver al resto: si un handler hace panic,
 		// lo atrapa antes de que tumbe el proceso.
 		grpc.ChainUnaryInterceptor(recoveryInterceptor, loggingInterceptor),
 	)
 
-	usersv1.RegisterUsersServiceServer(s, userService)
+	userv1.RegisterUserServiceServer(s, userService)
 	reflection.Register(s)
 
 	return s

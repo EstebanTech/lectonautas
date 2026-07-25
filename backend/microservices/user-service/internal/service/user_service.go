@@ -3,24 +3,32 @@ package service
 import (
 	"context"
 	"errors"
+	"log"
 	"net/mail"
 	"regexp"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/cache"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/domain"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/internal/repository"
-	usersv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/users-service/proto/users/v1"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/cache"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/domain"
+	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/repository"
+	userv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/proto/user/v1"
 )
 
 // El username es el handle publico, asi que se mantiene restringido: solo
 // minusculas, digitos, guion y guion bajo.
 var usernamePattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
+
+// userCacheTTL es cuanto viven en Valkey los datos de usuario que devuelven los
+// GET. Es corto a proposito: las escrituras que pasan por la API invalidan la
+// clave al instante, pero este TTL es el techo de cuanto puede quedar viejo un
+// dato que cambio por fuera (escritura directa a la BD, otro servicio).
+const userCacheTTL = 15 * time.Minute
 
 const (
 	usernameMinLen    = 3
@@ -33,17 +41,23 @@ const (
 )
 
 type UserService struct {
-	usersv1.UnimplementedUsersServiceServer
-	repo     repository.UserRepository
-	sessions repository.SessionRepository
-	cache    *cache.SessionCache
+	userv1.UnimplementedUserServiceServer
+	repo      repository.UserRepository
+	sessions  repository.SessionRepository
+	cache     *cache.SessionCache
+	userCache *cache.UserCache
 }
 
-func NewUserService(repo repository.UserRepository, sessions repository.SessionRepository, sessionCache *cache.SessionCache) *UserService {
-	return &UserService{repo: repo, sessions: sessions, cache: sessionCache}
+func NewUserService(
+	repo repository.UserRepository,
+	sessions repository.SessionRepository,
+	sessionCache *cache.SessionCache,
+	userCache *cache.UserCache,
+) *UserService {
+	return &UserService{repo: repo, sessions: sessions, cache: sessionCache, userCache: userCache}
 }
 
-func (s *UserService) CreateUser(ctx context.Context, req *usersv1.CreateUserRequest) (*usersv1.UserResponse, error) {
+func (s *UserService) CreateUser(ctx context.Context, req *userv1.CreateUserRequest) (*userv1.UserResponse, error) {
 	email, err := normalizeEmail(req.GetEmail())
 	if err != nil {
 		return nil, err
@@ -90,23 +104,53 @@ func (s *UserService) CreateUser(ctx context.Context, req *usersv1.CreateUserReq
 		return nil, mapRepoErr(err, "failed to create user")
 	}
 
-	return &usersv1.UserResponse{User: toProto(created)}, nil
+	// El listado completo quedo viejo: le falta este usuario.
+	if err := s.userCache.InvalidateAllUsers(ctx); err != nil {
+		log.Printf("all users cache invalidate failed: %v", err)
+	}
+
+	return &userv1.UserResponse{User: toProto(created)}, nil
 }
 
-func (s *UserService) GetUser(ctx context.Context, req *usersv1.GetUserRequest) (*usersv1.UserResponse, error) {
+func (s *UserService) GetUser(ctx context.Context, req *userv1.GetUserRequest) (*userv1.UserResponse, error) {
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
 
-	u, err := s.repo.GetByID(ctx, req.GetId())
+	u, err := s.userByID(ctx, req.GetId())
+	if err != nil {
+		return nil, err
+	}
+
+	return &userv1.UserResponse{User: toProto(u)}, nil
+}
+
+// userByID resuelve un usuario con cache-aside: primero Valkey, y si hay miss
+// va a la BD y repuebla la clave. Lo comparten GetUser y GetCurrentUser, asi
+// que ambos aprovechan la misma entrada.
+func (s *UserService) userByID(ctx context.Context, id string) (*domain.User, error) {
+	u, err := s.userCache.GetUser(ctx, id)
+	if err == nil {
+		return u, nil
+	}
+	if !errors.Is(err, cache.ErrMiss) {
+		// Error real de Valkey (no un simple miss): seguimos con la BD igual.
+		log.Printf("user cache get failed: %v", err)
+	}
+
+	u, err = s.repo.GetByID(ctx, id)
 	if err != nil {
 		return nil, mapRepoErr(err, "failed to get user")
 	}
 
-	return &usersv1.UserResponse{User: toProto(u)}, nil
+	if err := s.userCache.SetUser(ctx, u, userCacheTTL); err != nil {
+		// No es fatal: el usuario ya se resolvio desde la BD.
+		log.Printf("user cache set failed: %v", err)
+	}
+	return u, nil
 }
 
-func (s *UserService) UpdateUser(ctx context.Context, req *usersv1.UpdateUserRequest) (*usersv1.UserResponse, error) {
+func (s *UserService) UpdateUser(ctx context.Context, req *userv1.UpdateUserRequest) (*userv1.UserResponse, error) {
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
@@ -155,10 +199,16 @@ func (s *UserService) UpdateUser(ctx context.Context, req *usersv1.UpdateUserReq
 		return nil, mapRepoErr(err, "failed to update user")
 	}
 
-	return &usersv1.UserResponse{User: toProto(updated)}, nil
+	// Se invalida en vez de reescribir la clave: si el Set fallara, quedaria
+	// sirviendo el usuario viejo hasta que venza el TTL.
+	if err := s.userCache.InvalidateUser(ctx, updated.ID); err != nil {
+		log.Printf("user cache invalidate failed: %v", err)
+	}
+
+	return &userv1.UserResponse{User: toProto(updated)}, nil
 }
 
-func (s *UserService) DeleteUser(ctx context.Context, req *usersv1.DeleteUserRequest) (*usersv1.DeleteUserResponse, error) {
+func (s *UserService) DeleteUser(ctx context.Context, req *userv1.DeleteUserRequest) (*userv1.DeleteUserResponse, error) {
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
@@ -167,30 +217,38 @@ func (s *UserService) DeleteUser(ctx context.Context, req *usersv1.DeleteUserReq
 		return nil, mapRepoErr(err, "failed to delete user")
 	}
 
-	return &usersv1.DeleteUserResponse{Success: true}, nil
+	if err := s.userCache.InvalidateUser(ctx, req.GetId()); err != nil {
+		log.Printf("user cache invalidate failed: %v", err)
+	}
+
+	return &userv1.DeleteUserResponse{Success: true}, nil
 }
 
-func (s *UserService) ListUsers(ctx context.Context, req *usersv1.ListUsersRequest) (*usersv1.ListUsersResponse, error) {
-	page := req.GetPage()
-	pageSize := req.GetPageSize()
-	if page < 1 {
-		page = 1
-	}
-	if pageSize < 1 || pageSize > 100 {
-		pageSize = 20
-	}
-
-	users, total, err := s.repo.List(ctx, pageSize, (page-1)*pageSize)
+// GetAllUsers devuelve todos los usuarios, sin paginacion ni filtros. Tambien
+// va por cache-aside: la respuesta completa vive en una sola clave de Valkey.
+func (s *UserService) GetAllUsers(ctx context.Context, _ *userv1.GetAllUsersRequest) (*userv1.GetAllUsersResponse, error) {
+	users, err := s.userCache.GetAllUsers(ctx)
 	if err != nil {
-		return nil, status.Error(codes.Internal, "failed to list users")
+		if !errors.Is(err, cache.ErrMiss) {
+			log.Printf("all users cache get failed: %v", err)
+		}
+
+		users, err = s.repo.GetAll(ctx)
+		if err != nil {
+			return nil, status.Error(codes.Internal, "failed to get users")
+		}
+
+		if err := s.userCache.SetAllUsers(ctx, users, userCacheTTL); err != nil {
+			log.Printf("all users cache set failed: %v", err)
+		}
 	}
 
-	out := make([]*usersv1.User, 0, len(users))
+	out := make([]*userv1.User, 0, len(users))
 	for _, u := range users {
 		out = append(out, toProto(u))
 	}
 
-	return &usersv1.ListUsersResponse{Users: out, Total: total}, nil
+	return &userv1.GetAllUsersResponse{Users: out, Total: int32(len(out))}, nil
 }
 
 func normalizeEmail(raw string) (string, error) {
@@ -264,8 +322,8 @@ func mapRepoErr(err error, fallback string) error {
 	}
 }
 
-func toProto(u *domain.User) *usersv1.User {
-	return &usersv1.User{
+func toProto(u *domain.User) *userv1.User {
+	return &userv1.User{
 		Id:          u.ID,
 		Email:       u.Email,
 		Username:    u.Username,
