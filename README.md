@@ -148,7 +148,9 @@ que las claves viejas quedan inalcanzables de golpe.
 ## Estado
 
 - `user-service`: CRUD de usuarios más login y sesiones con tabla `session` y
-  Valkey. Pendiente: más tests (solo tiene los de `auth`).
+  Valkey. 60 casos de prueba: validación, CRUD, cache-aside e invalidación con
+  dobles en memoria (`make test`), más las reglas de vigencia de la sesión
+  contra Postgres real (`make test-integration`).
 - `library-service`: libros, capítulos, sagas y biblioteca del lector. 80 casos
   de prueba: las reglas de visibilidad y propiedad con dobles en memoria
   (`make test`), más las de repositorio contra Postgres real —transacciones,

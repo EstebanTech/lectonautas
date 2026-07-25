@@ -40,19 +40,44 @@ const (
 	bioMaxLen         = 1000
 )
 
+// SessionCache y UserCache son lo que el servicio necesita de Valkey. Son
+// interfaces y no los tipos concretos para poder probar el cache-aside y la
+// invalidacion sin levantar Valkey, y para poder afirmar que una lectura
+// cacheada de verdad no toca la BD.
+type SessionCache interface {
+	Set(ctx context.Context, tokenHash, userID string, ttl time.Duration) error
+	Get(ctx context.Context, tokenHash string) (string, error)
+	Delete(ctx context.Context, tokenHash string) error
+}
+
+type UserCache interface {
+	SetUser(ctx context.Context, u *domain.User, ttl time.Duration) error
+	GetUser(ctx context.Context, id string) (*domain.User, error)
+	SetAllUsers(ctx context.Context, users []*domain.User, ttl time.Duration) error
+	GetAllUsers(ctx context.Context) ([]*domain.User, error)
+	InvalidateUser(ctx context.Context, id string) error
+	InvalidateAllUsers(ctx context.Context) error
+}
+
+// Las implementaciones reales tienen que seguir cumpliendo el contrato.
+var (
+	_ SessionCache = (*cache.SessionCache)(nil)
+	_ UserCache    = (*cache.UserCache)(nil)
+)
+
 type UserService struct {
 	userv1.UnimplementedUserServiceServer
 	repo      repository.UserRepository
 	sessions  repository.SessionRepository
-	cache     *cache.SessionCache
-	userCache *cache.UserCache
+	cache     SessionCache
+	userCache UserCache
 }
 
 func NewUserService(
 	repo repository.UserRepository,
 	sessions repository.SessionRepository,
-	sessionCache *cache.SessionCache,
-	userCache *cache.UserCache,
+	sessionCache SessionCache,
+	userCache UserCache,
 ) *UserService {
 	return &UserService{repo: repo, sessions: sessions, cache: sessionCache, userCache: userCache}
 }
