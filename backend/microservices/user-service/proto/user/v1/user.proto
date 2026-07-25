@@ -57,6 +57,16 @@ service UserService {
       body: "*"
     };
   }
+
+  // ValidateSession resuelve un token a su user_id. Es la puerta que usan los
+  // demas servicios (library-service, etc.) para autenticar sin tener la tabla
+  // de sesiones: la fuente de verdad de las sesiones vive solo aqui.
+  //
+  // A proposito NO lleva anotacion google.api.http, asi que no existe como
+  // endpoint REST. Ojo: eso solo no la vuelve interna, porque el gateway tiene
+  // una ruta de passthrough para gRPC crudo; queda bloqueada aparte en
+  // envoy.yaml. Los vecinos la llaman directo a user-service:50051.
+  rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse);
 }
 
 // El password nunca se expone: solo se acepta al crear el usuario.
@@ -138,4 +148,14 @@ message LogoutRequest {}
 
 message LogoutResponse {
   bool success = 1;
+}
+
+// El token viaja en el cuerpo, no en el header: quien llama es otro servicio
+// reenviando el token de su cliente, no el cliente mismo.
+message ValidateSessionRequest {
+  string token = 1;
+}
+
+message ValidateSessionResponse {
+  string user_id = 1;
 }

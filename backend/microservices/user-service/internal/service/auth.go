@@ -135,14 +135,40 @@ func (s *UserService) Logout(ctx context.Context, _ *userv1.LogoutRequest) (*use
 	return &userv1.LogoutResponse{Success: true}, nil
 }
 
-// authenticate es el flujo cache-aside: hashea el token del header, lo busca en
-// Valkey; si hay miss, cae a la BD y, si la sesion sigue vigente, repuebla
-// Valkey con el TTL restante. Devuelve el user_id de la sesion.
+// ValidateSession resuelve un token a su user_id para otros servicios. No lo
+// expone el gateway (no tiene anotacion HTTP): lo llaman los vecinos por gRPC,
+// que no tienen la tabla de sesiones y no deben tenerla.
+func (s *UserService) ValidateSession(ctx context.Context, req *userv1.ValidateSessionRequest) (*userv1.ValidateSessionResponse, error) {
+	raw := strings.TrimSpace(req.GetToken())
+	if raw == "" {
+		return nil, status.Error(codes.InvalidArgument, "token is required")
+	}
+
+	userID, err := s.resolveSession(ctx, raw)
+	if err != nil {
+		return nil, err
+	}
+	return &userv1.ValidateSessionResponse{UserId: userID}, nil
+}
+
+// authenticate resuelve la sesion del token que viene en el header Authorization.
 func (s *UserService) authenticate(ctx context.Context) (string, error) {
 	raw, err := bearerToken(ctx)
 	if err != nil {
 		return "", err
 	}
+	return s.resolveSession(ctx, raw)
+}
+
+// resolveSession es el flujo cache-aside: hashea el token, lo busca en Valkey;
+// si hay miss, cae a la BD y, si la sesion sigue vigente, repuebla Valkey.
+// Devuelve el user_id de la sesion.
+//
+// Es el unico punto donde se resuelve una sesion, lo llame el propio cliente
+// (por el header) o un servicio vecino (por ValidateSession). Los vecinos no
+// leen esta clave de Valkey directamente: tendrian que replicar el hasheo del
+// token y, ante un miss, no tendrian a que caer.
+func (s *UserService) resolveSession(ctx context.Context, raw string) (string, error) {
 	hash := token.Hash(raw)
 
 	// 1) Valkey primero.

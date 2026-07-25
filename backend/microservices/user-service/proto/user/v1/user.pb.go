@@ -793,6 +793,96 @@ func (x *LogoutResponse) GetSuccess() bool {
 	return false
 }
 
+// El token viaja en el cuerpo, no en el header: quien llama es otro servicio
+// reenviando el token de su cliente, no el cliente mismo.
+type ValidateSessionRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Token         string                 `protobuf:"bytes,1,opt,name=token,proto3" json:"token,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ValidateSessionRequest) Reset() {
+	*x = ValidateSessionRequest{}
+	mi := &file_user_v1_user_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ValidateSessionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ValidateSessionRequest) ProtoMessage() {}
+
+func (x *ValidateSessionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_user_v1_user_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ValidateSessionRequest.ProtoReflect.Descriptor instead.
+func (*ValidateSessionRequest) Descriptor() ([]byte, []int) {
+	return file_user_v1_user_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ValidateSessionRequest) GetToken() string {
+	if x != nil {
+		return x.Token
+	}
+	return ""
+}
+
+type ValidateSessionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ValidateSessionResponse) Reset() {
+	*x = ValidateSessionResponse{}
+	mi := &file_user_v1_user_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ValidateSessionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ValidateSessionResponse) ProtoMessage() {}
+
+func (x *ValidateSessionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_user_v1_user_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ValidateSessionResponse.ProtoReflect.Descriptor instead.
+func (*ValidateSessionResponse) Descriptor() ([]byte, []int) {
+	return file_user_v1_user_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ValidateSessionResponse) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
 var File_user_v1_user_proto protoreflect.FileDescriptor
 
 const file_user_v1_user_proto_rawDesc = "" +
@@ -854,7 +944,11 @@ const file_user_v1_user_proto_rawDesc = "" +
 	"\x15GetCurrentUserRequest\"\x0f\n" +
 	"\rLogoutRequest\"*\n" +
 	"\x0eLogoutResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess2\xd7\x05\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\".\n" +
+	"\x16ValidateSessionRequest\x12\x14\n" +
+	"\x05token\x18\x01 \x01(\tR\x05token\"2\n" +
+	"\x17ValidateSessionResponse\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId2\xad\x06\n" +
 	"\vUserService\x12U\n" +
 	"\n" +
 	"CreateUser\x12\x1a.user.v1.CreateUserRequest\x1a\x15.user.v1.UserResponse\"\x14\x82\xd3\xe4\x93\x02\x0e:\x01*\"\t/v1/users\x12Q\n" +
@@ -866,7 +960,8 @@ const file_user_v1_user_proto_rawDesc = "" +
 	"\vGetAllUsers\x12\x1b.user.v1.GetAllUsersRequest\x1a\x1c.user.v1.GetAllUsersResponse\"\x11\x82\xd3\xe4\x93\x02\v\x12\t/v1/users\x12Q\n" +
 	"\x05Login\x12\x15.user.v1.LoginRequest\x1a\x16.user.v1.LoginResponse\"\x19\x82\xd3\xe4\x93\x02\x13:\x01*\"\x0e/v1/auth/login\x12\\\n" +
 	"\x0eGetCurrentUser\x12\x1e.user.v1.GetCurrentUserRequest\x1a\x15.user.v1.UserResponse\"\x13\x82\xd3\xe4\x93\x02\r\x12\v/v1/auth/me\x12U\n" +
-	"\x06Logout\x12\x16.user.v1.LogoutRequest\x1a\x17.user.v1.LogoutResponse\"\x1a\x82\xd3\xe4\x93\x02\x14:\x01*\"\x0f/v1/auth/logoutBcZagithub.com/estebandeveloper20/lectonautas/backend/microservices/user-service/proto/user/v1;userv1b\x06proto3"
+	"\x06Logout\x12\x16.user.v1.LogoutRequest\x1a\x17.user.v1.LogoutResponse\"\x1a\x82\xd3\xe4\x93\x02\x14:\x01*\"\x0f/v1/auth/logout\x12T\n" +
+	"\x0fValidateSession\x12\x1f.user.v1.ValidateSessionRequest\x1a .user.v1.ValidateSessionResponseBcZagithub.com/estebandeveloper20/lectonautas/backend/microservices/user-service/proto/user/v1;userv1b\x06proto3"
 
 var (
 	file_user_v1_user_proto_rawDescOnce sync.Once
@@ -880,27 +975,29 @@ func file_user_v1_user_proto_rawDescGZIP() []byte {
 	return file_user_v1_user_proto_rawDescData
 }
 
-var file_user_v1_user_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_user_v1_user_proto_msgTypes = make([]protoimpl.MessageInfo, 16)
 var file_user_v1_user_proto_goTypes = []any{
-	(*User)(nil),                  // 0: user.v1.User
-	(*CreateUserRequest)(nil),     // 1: user.v1.CreateUserRequest
-	(*GetUserRequest)(nil),        // 2: user.v1.GetUserRequest
-	(*UpdateUserRequest)(nil),     // 3: user.v1.UpdateUserRequest
-	(*DeleteUserRequest)(nil),     // 4: user.v1.DeleteUserRequest
-	(*DeleteUserResponse)(nil),    // 5: user.v1.DeleteUserResponse
-	(*GetAllUsersRequest)(nil),    // 6: user.v1.GetAllUsersRequest
-	(*GetAllUsersResponse)(nil),   // 7: user.v1.GetAllUsersResponse
-	(*UserResponse)(nil),          // 8: user.v1.UserResponse
-	(*LoginRequest)(nil),          // 9: user.v1.LoginRequest
-	(*LoginResponse)(nil),         // 10: user.v1.LoginResponse
-	(*GetCurrentUserRequest)(nil), // 11: user.v1.GetCurrentUserRequest
-	(*LogoutRequest)(nil),         // 12: user.v1.LogoutRequest
-	(*LogoutResponse)(nil),        // 13: user.v1.LogoutResponse
-	(*timestamppb.Timestamp)(nil), // 14: google.protobuf.Timestamp
+	(*User)(nil),                    // 0: user.v1.User
+	(*CreateUserRequest)(nil),       // 1: user.v1.CreateUserRequest
+	(*GetUserRequest)(nil),          // 2: user.v1.GetUserRequest
+	(*UpdateUserRequest)(nil),       // 3: user.v1.UpdateUserRequest
+	(*DeleteUserRequest)(nil),       // 4: user.v1.DeleteUserRequest
+	(*DeleteUserResponse)(nil),      // 5: user.v1.DeleteUserResponse
+	(*GetAllUsersRequest)(nil),      // 6: user.v1.GetAllUsersRequest
+	(*GetAllUsersResponse)(nil),     // 7: user.v1.GetAllUsersResponse
+	(*UserResponse)(nil),            // 8: user.v1.UserResponse
+	(*LoginRequest)(nil),            // 9: user.v1.LoginRequest
+	(*LoginResponse)(nil),           // 10: user.v1.LoginResponse
+	(*GetCurrentUserRequest)(nil),   // 11: user.v1.GetCurrentUserRequest
+	(*LogoutRequest)(nil),           // 12: user.v1.LogoutRequest
+	(*LogoutResponse)(nil),          // 13: user.v1.LogoutResponse
+	(*ValidateSessionRequest)(nil),  // 14: user.v1.ValidateSessionRequest
+	(*ValidateSessionResponse)(nil), // 15: user.v1.ValidateSessionResponse
+	(*timestamppb.Timestamp)(nil),   // 16: google.protobuf.Timestamp
 }
 var file_user_v1_user_proto_depIdxs = []int32{
-	14, // 0: user.v1.User.created_at:type_name -> google.protobuf.Timestamp
-	14, // 1: user.v1.User.updated_at:type_name -> google.protobuf.Timestamp
+	16, // 0: user.v1.User.created_at:type_name -> google.protobuf.Timestamp
+	16, // 1: user.v1.User.updated_at:type_name -> google.protobuf.Timestamp
 	0,  // 2: user.v1.GetAllUsersResponse.users:type_name -> user.v1.User
 	0,  // 3: user.v1.UserResponse.user:type_name -> user.v1.User
 	0,  // 4: user.v1.LoginResponse.user:type_name -> user.v1.User
@@ -912,16 +1009,18 @@ var file_user_v1_user_proto_depIdxs = []int32{
 	9,  // 10: user.v1.UserService.Login:input_type -> user.v1.LoginRequest
 	11, // 11: user.v1.UserService.GetCurrentUser:input_type -> user.v1.GetCurrentUserRequest
 	12, // 12: user.v1.UserService.Logout:input_type -> user.v1.LogoutRequest
-	8,  // 13: user.v1.UserService.CreateUser:output_type -> user.v1.UserResponse
-	8,  // 14: user.v1.UserService.GetUser:output_type -> user.v1.UserResponse
-	8,  // 15: user.v1.UserService.UpdateUser:output_type -> user.v1.UserResponse
-	5,  // 16: user.v1.UserService.DeleteUser:output_type -> user.v1.DeleteUserResponse
-	7,  // 17: user.v1.UserService.GetAllUsers:output_type -> user.v1.GetAllUsersResponse
-	10, // 18: user.v1.UserService.Login:output_type -> user.v1.LoginResponse
-	8,  // 19: user.v1.UserService.GetCurrentUser:output_type -> user.v1.UserResponse
-	13, // 20: user.v1.UserService.Logout:output_type -> user.v1.LogoutResponse
-	13, // [13:21] is the sub-list for method output_type
-	5,  // [5:13] is the sub-list for method input_type
+	14, // 13: user.v1.UserService.ValidateSession:input_type -> user.v1.ValidateSessionRequest
+	8,  // 14: user.v1.UserService.CreateUser:output_type -> user.v1.UserResponse
+	8,  // 15: user.v1.UserService.GetUser:output_type -> user.v1.UserResponse
+	8,  // 16: user.v1.UserService.UpdateUser:output_type -> user.v1.UserResponse
+	5,  // 17: user.v1.UserService.DeleteUser:output_type -> user.v1.DeleteUserResponse
+	7,  // 18: user.v1.UserService.GetAllUsers:output_type -> user.v1.GetAllUsersResponse
+	10, // 19: user.v1.UserService.Login:output_type -> user.v1.LoginResponse
+	8,  // 20: user.v1.UserService.GetCurrentUser:output_type -> user.v1.UserResponse
+	13, // 21: user.v1.UserService.Logout:output_type -> user.v1.LogoutResponse
+	15, // 22: user.v1.UserService.ValidateSession:output_type -> user.v1.ValidateSessionResponse
+	14, // [14:23] is the sub-list for method output_type
+	5,  // [5:14] is the sub-list for method input_type
 	5,  // [5:5] is the sub-list for extension type_name
 	5,  // [5:5] is the sub-list for extension extendee
 	0,  // [0:5] is the sub-list for field type_name
@@ -939,7 +1038,7 @@ func file_user_v1_user_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_user_v1_user_proto_rawDesc), len(file_user_v1_user_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   14,
+			NumMessages:   16,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

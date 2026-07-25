@@ -19,14 +19,15 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	UserService_CreateUser_FullMethodName     = "/user.v1.UserService/CreateUser"
-	UserService_GetUser_FullMethodName        = "/user.v1.UserService/GetUser"
-	UserService_UpdateUser_FullMethodName     = "/user.v1.UserService/UpdateUser"
-	UserService_DeleteUser_FullMethodName     = "/user.v1.UserService/DeleteUser"
-	UserService_GetAllUsers_FullMethodName    = "/user.v1.UserService/GetAllUsers"
-	UserService_Login_FullMethodName          = "/user.v1.UserService/Login"
-	UserService_GetCurrentUser_FullMethodName = "/user.v1.UserService/GetCurrentUser"
-	UserService_Logout_FullMethodName         = "/user.v1.UserService/Logout"
+	UserService_CreateUser_FullMethodName      = "/user.v1.UserService/CreateUser"
+	UserService_GetUser_FullMethodName         = "/user.v1.UserService/GetUser"
+	UserService_UpdateUser_FullMethodName      = "/user.v1.UserService/UpdateUser"
+	UserService_DeleteUser_FullMethodName      = "/user.v1.UserService/DeleteUser"
+	UserService_GetAllUsers_FullMethodName     = "/user.v1.UserService/GetAllUsers"
+	UserService_Login_FullMethodName           = "/user.v1.UserService/Login"
+	UserService_GetCurrentUser_FullMethodName  = "/user.v1.UserService/GetCurrentUser"
+	UserService_Logout_FullMethodName          = "/user.v1.UserService/Logout"
+	UserService_ValidateSession_FullMethodName = "/user.v1.UserService/ValidateSession"
 )
 
 // UserServiceClient is the client API for UserService service.
@@ -45,6 +46,15 @@ type UserServiceClient interface {
 	GetCurrentUser(ctx context.Context, in *GetCurrentUserRequest, opts ...grpc.CallOption) (*UserResponse, error)
 	// Revoca la sesion del token enviado en el header Authorization.
 	Logout(ctx context.Context, in *LogoutRequest, opts ...grpc.CallOption) (*LogoutResponse, error)
+	// ValidateSession resuelve un token a su user_id. Es la puerta que usan los
+	// demas servicios (library-service, etc.) para autenticar sin tener la tabla
+	// de sesiones: la fuente de verdad de las sesiones vive solo aqui.
+	//
+	// A proposito NO lleva anotacion google.api.http, asi que no existe como
+	// endpoint REST. Ojo: eso solo no la vuelve interna, porque el gateway tiene
+	// una ruta de passthrough para gRPC crudo; queda bloqueada aparte en
+	// envoy.yaml. Los vecinos la llaman directo a user-service:50051.
+	ValidateSession(ctx context.Context, in *ValidateSessionRequest, opts ...grpc.CallOption) (*ValidateSessionResponse, error)
 }
 
 type userServiceClient struct {
@@ -135,6 +145,16 @@ func (c *userServiceClient) Logout(ctx context.Context, in *LogoutRequest, opts 
 	return out, nil
 }
 
+func (c *userServiceClient) ValidateSession(ctx context.Context, in *ValidateSessionRequest, opts ...grpc.CallOption) (*ValidateSessionResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateSessionResponse)
+	err := c.cc.Invoke(ctx, UserService_ValidateSession_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // UserServiceServer is the server API for UserService service.
 // All implementations must embed UnimplementedUserServiceServer
 // for forward compatibility.
@@ -151,6 +171,15 @@ type UserServiceServer interface {
 	GetCurrentUser(context.Context, *GetCurrentUserRequest) (*UserResponse, error)
 	// Revoca la sesion del token enviado en el header Authorization.
 	Logout(context.Context, *LogoutRequest) (*LogoutResponse, error)
+	// ValidateSession resuelve un token a su user_id. Es la puerta que usan los
+	// demas servicios (library-service, etc.) para autenticar sin tener la tabla
+	// de sesiones: la fuente de verdad de las sesiones vive solo aqui.
+	//
+	// A proposito NO lleva anotacion google.api.http, asi que no existe como
+	// endpoint REST. Ojo: eso solo no la vuelve interna, porque el gateway tiene
+	// una ruta de passthrough para gRPC crudo; queda bloqueada aparte en
+	// envoy.yaml. Los vecinos la llaman directo a user-service:50051.
+	ValidateSession(context.Context, *ValidateSessionRequest) (*ValidateSessionResponse, error)
 	mustEmbedUnimplementedUserServiceServer()
 }
 
@@ -184,6 +213,9 @@ func (UnimplementedUserServiceServer) GetCurrentUser(context.Context, *GetCurren
 }
 func (UnimplementedUserServiceServer) Logout(context.Context, *LogoutRequest) (*LogoutResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Logout not implemented")
+}
+func (UnimplementedUserServiceServer) ValidateSession(context.Context, *ValidateSessionRequest) (*ValidateSessionResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ValidateSession not implemented")
 }
 func (UnimplementedUserServiceServer) mustEmbedUnimplementedUserServiceServer() {}
 func (UnimplementedUserServiceServer) testEmbeddedByValue()                     {}
@@ -350,6 +382,24 @@ func _UserService_Logout_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _UserService_ValidateSession_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ValidateSessionRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(UserServiceServer).ValidateSession(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: UserService_ValidateSession_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(UserServiceServer).ValidateSession(ctx, req.(*ValidateSessionRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // UserService_ServiceDesc is the grpc.ServiceDesc for UserService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -388,6 +438,10 @@ var UserService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Logout",
 			Handler:    _UserService_Logout_Handler,
+		},
+		{
+			MethodName: "ValidateSession",
+			Handler:    _UserService_ValidateSession_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
