@@ -1,4 +1,31 @@
-# Lectonautas
+<div align="center">
+
+```
+██╗     ███████╗ ██████╗████████╗ ██████╗ ███╗   ██╗ █████╗ ██╗   ██╗████████╗ █████╗ ███████╗
+██║     ██╔════╝██╔════╝╚══██╔══╝██╔═══██╗████╗  ██║██╔══██╗██║   ██║╚══██╔══╝██╔══██╗██╔════╝
+██║     █████╗  ██║        ██║   ██║   ██║██╔██╗ ██║███████║██║   ██║   ██║   ███████║███████╗
+██║     ██╔══╝  ██║        ██║   ██║   ██║██║╚██╗██║██╔══██║██║   ██║   ██║   ██╔══██║╚════██║
+███████╗███████╗╚██████╗   ██║   ╚██████╔╝██║ ╚████║██║  ██║╚██████╔╝   ██║   ██║  ██║███████║
+╚══════╝╚══════╝ ╚═════╝   ╚═╝    ╚═════╝ ╚═╝  ╚═══╝╚═╝  ╚═╝ ╚═════╝    ╚═╝   ╚═╝  ╚═╝╚══════╝
+```
+
+**Las mejores historias no solo se leen, también se viven.**
+
+</div>
+
+---
+
+Un **lectonauta** no abre un libro: se embarca en él.
+
+Lectonautas es una red social literaria que conecta lectores y escritores, donde
+las historias pueden ser **interactivas**: cada decisión del lector desvía la
+ruta y el relato termina en un puerto distinto. La misma historia, leída dos
+veces, no es la misma historia.
+
+El proyecto busca usar tecnología para crear nuevas formas de contar historias y
+conectar personas a través de la literatura.
+
+## Bitácora técnica
 
 Monorepo de Lectonautas. El backend son microservicios en Go que se comunican
 entre sí por **gRPC**, detrás de un **API Gateway** con Envoy que expone HTTP/JSON
