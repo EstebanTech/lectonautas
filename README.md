@@ -149,9 +149,11 @@ que las claves viejas quedan inalcanzables de golpe.
 
 - `user-service`: CRUD de usuarios más login y sesiones con tabla `session` y
   Valkey. Pendiente: más tests (solo tiene los de `auth`).
-- `library-service`: libros, capítulos, sagas y biblioteca del lector. 67 casos
-  de prueba sobre las reglas de visibilidad y propiedad (60% de la capa de
-  servicio). Pendiente: tests de repositorio contra una BD real.
+- `library-service`: libros, capítulos, sagas y biblioteca del lector. 80 casos
+  de prueba: las reglas de visibilidad y propiedad con dobles en memoria
+  (`make test`), más las de repositorio contra Postgres real —transacciones,
+  CASCADE y los UNIQUE del esquema— con `make test-integration`. Estas últimas
+  se saltan solas si no hay base configurada.
 - Gateway probado end-to-end: transcoding, CORS y rate limiting a 80 req/min por IP.
 - Fuera de alcance por ahora: likes, comentarios y ratings, que irían en un
   `interaction-service` aparte.

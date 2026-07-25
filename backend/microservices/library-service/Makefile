@@ -3,7 +3,7 @@ ROOT_DIR := ../../..
 DB_URL ?= $(shell grep -E '^LIBRARY_SERVICE_DATABASE_URL=' $(ROOT_DIR)/.env | cut -d '=' -f2-)
 PROTO_PATHS := --proto_path=proto --proto_path=proto/third_party
 
-.PHONY: proto tidy build run migrate-up migrate-down
+.PHONY: proto tidy build run test test-integration migrate-up migrate-down
 
 # Genera los .pb.go del contrato propio y del stub de cliente de user-service.
 # El descriptor que consume el gateway NO se genera aquí: es uno solo con todos
@@ -17,6 +17,15 @@ proto:
 
 tidy:
 	go mod tidy
+
+# Pruebas de la lógica de negocio: no necesitan Postgres, Valkey ni user-service.
+test:
+	go test ./... -count=1
+
+# Añade las de repositorio, que sí hablan con Postgres. Sin la variable, esas
+# pruebas se saltan solas, que es lo que hace `make test`.
+test-integration:
+	LIBRARY_TEST_DATABASE_URL="$(DB_URL)" go test ./... -count=1
 
 build:
 	go build -o bin/library-service ./cmd/server
