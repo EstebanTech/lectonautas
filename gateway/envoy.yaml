@@ -49,12 +49,46 @@ static_resources:
                             rate_limits:
                               - actions:
                                   - remote_address: {}
+                        # Libros, capítulos (anidados bajo el libro) y sagas.
+                        - match: { prefix: "/v1/books" }
+                          route:
+                            cluster: library_service
+                            rate_limits:
+                              - actions:
+                                  - remote_address: {}
+                        - match: { prefix: "/v1/sagas" }
+                          route:
+                            cluster: library_service
+                            rate_limits:
+                              - actions:
+                                  - remote_address: {}
+                        # Biblioteca del lector (favoritos / leer más tarde).
+                        - match: { prefix: "/v1/library" }
+                          route:
+                            cluster: library_service
+                            rate_limits:
+                              - actions:
+                                  - remote_address: {}
+                        # RPCs internos de servicio a servicio: no llevan anotación
+                        # HTTP, pero la ruta de passthrough de abajo aceptaría gRPC
+                        # crudo desde fuera igual. Se bloquean aquí, antes de ella.
+                        # Los vecinos los llaman directo a user-service:50051, sin
+                        # pasar por el gateway.
+                        - match: { path: "/user.v1.UserService/ValidateSession" }
+                          direct_response:
+                            status: 404
+                            body:
+                              inline_string: "not found"
                         # El transcoder sí invalida el caché de ruta tras reescribir
                         # el path, así que el router vuelve a resolver — esta vez
                         # contra el path gRPC ya transcodificado.
                         - match: { prefix: "/user.v1.UserService/" }
                           route:
                             cluster: user_service
+                            timeout: 15s
+                        - match: { prefix: "/library.v1.LibraryService/" }
+                          route:
+                            cluster: library_service
                             timeout: 15s
                 http_filters:
                   - name: envoy.filters.http.cors
@@ -86,13 +120,35 @@ static_resources:
                   - name: envoy.filters.http.grpc_json_transcoder
                     typed_config:
                       "@type": type.googleapis.com/envoy.extensions.filters.http.grpc_json_transcoder.v3.GrpcJsonTranscoder
-                      proto_descriptor: "/etc/envoy/proto/user_service.pb"
-                      services: ["user.v1.UserService"]
+                      # Un solo descriptor con todos los servicios: el filtro
+                      # admite uno nada más. Lo genera `make proto-descriptor`
+                      # en la raíz del monorepo.
+                      proto_descriptor: "/etc/envoy/proto/services.pb"
+                      services:
+                        - "user.v1.UserService"
+                        - "library.v1.LibraryService"
                       # Sin esto, el status y mensaje gRPC quedan como headers
                       # crudos (grpc-status/grpc-message) en la respuesta HTTP;
                       # con esto, el transcoder los traduce a un status HTTP real
                       # (y a un body de error JSON estándar si algo falla).
                       convert_grpc_status: true
+                      # Sin esto, un parámetro de query que no existe en el
+                      # mensaje hace fallar la transcodificación en silencio: la
+                      # petición sigue como gRPC crudo hacia el servicio y el
+                      # cliente recibe un 415 con el cuerpo vacío, sin pista de
+                      # qué estuvo mal. Con la validación activa, el gateway
+                      # responde un 400 que dice cuál es el parámetro.
+                      request_validation_options:
+                        reject_unknown_query_parameters: true
+                        # Misma razón: una ruta bajo un prefijo enrutado aquí
+                        # (p. ej. /v1/books/loquesea) que no corresponda a
+                        # ningún método seguiría como gRPC crudo hacia el
+                        # servicio y devolvería un 415 mudo. Con esto el
+                        # gateway responde 404 y dice que el método no existe.
+                        # No afecta al passthrough de gRPC real: el transcoder
+                        # no toca las peticiones con content-type
+                        # application/grpc.
+                        reject_unknown_method: true
                       print_options:
                         add_whitespace: true
                         always_print_primitive_fields: true
@@ -118,6 +174,23 @@ static_resources:
               - endpoint:
                   address:
                     socket_address: { address: user-service, port_value: 50051 }
+
+    - name: library_service
+      connect_timeout: 2s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: library_service
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: library-service, port_value: 50052 }
 
     - name: ratelimit_service
       connect_timeout: 1s

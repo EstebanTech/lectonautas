@@ -103,8 +103,55 @@ con TTL de 2h. En cada request autenticado el token del header se hashea y se
 busca primero en Valkey; si no está, se valida contra la BD y se repuebla Valkey
 con el tiempo restante, siguiendo un patrón cache-aside.
 
+`user-service` es el único dueño de las sesiones. Los demás servicios no tienen
+esa tabla: resuelven el token llamándolo por gRPC (`ValidateSession`), que no
+está expuesta como endpoint HTTP y además queda bloqueada en el gateway.
+
+## API HTTP — library-service
+
+Los libros de otros solo se ven **publicados**. Un borrador ajeno responde `404`,
+no `403`: que exista tampoco es público.
+
+| Método | Ruta | Acción |
+|---|---|---|
+| `POST` | `/v1/books` | Crear libro (crea también su primer capítulo) |
+| `GET` | `/v1/books` | Listado público y paginado: **solo publicados** |
+| `GET` | `/v1/books/mine` | Los libros del autor del token, en **cualquier** estado |
+| `GET` | `/v1/books/{id}` | Libro con sus capítulos |
+| `PATCH` | `/v1/books/{id}` | Actualizar libro |
+| `DELETE` | `/v1/books/{id}` | Eliminar libro (arrastra capítulos por CASCADE) |
+| `POST` | `/v1/books/{bookId}/chapters` | Crear capítulo |
+| `GET` | `/v1/books/{bookId}/chapters/{id}` | Obtener capítulo |
+| `PATCH` | `/v1/books/{bookId}/chapters/{id}` | Actualizar capítulo |
+| `DELETE` | `/v1/books/{bookId}/chapters/{id}` | Eliminar capítulo (nunca el último) |
+| `PATCH` | `/v1/books/{bookId}/chapters/reorder` | Reordenar: manda todos los ids en orden |
+| `POST` | `/v1/sagas` | Crear saga |
+| `GET` | `/v1/sagas` | Listado público de sagas |
+| `GET` | `/v1/sagas/mine` | Las sagas del autor del token |
+| `GET` | `/v1/sagas/{id}` | Saga con sus libros ordenados |
+| `PATCH` | `/v1/sagas/{id}` | Actualizar saga |
+| `DELETE` | `/v1/sagas/{id}` | Eliminar saga (los libros no se tocan) |
+| `POST` | `/v1/sagas/{sagaId}/books` | Vincular un libro a la saga |
+| `DELETE` | `/v1/sagas/{sagaId}/books/{bookId}` | Desvincular |
+| `PATCH` | `/v1/sagas/{sagaId}/books/reorder` | Reordenar los libros de la saga |
+| `POST` | `/v1/library` | Guardar un libro (`favorite` / `read_later`) |
+| `GET` | `/v1/library` | Mi biblioteca (filtro opcional `?kind=`) |
+| `DELETE` | `/v1/library/{bookId}` | Quitar de la biblioteca (`?kind=` opcional) |
+
+Los endpoints `/mine` y todo `/v1/library` **no aceptan `author_id` ni `user_id`**:
+salen del token. Es lo que impide pedir la biblioteca privada de otro.
+
+Toda lectura se cachea en Valkey con TTL de 15 minutos. La invalidación es por
+versión: cada clave lleva dentro un contador que toda escritura incrementa, así
+que las claves viejas quedan inalcanzables de golpe.
+
 ## Estado
 
 - `user-service`: CRUD de usuarios más login y sesiones con tabla `session` y
-  Valkey. Pendiente: tests.
+  Valkey. Pendiente: más tests (solo tiene los de `auth`).
+- `library-service`: libros, capítulos, sagas y biblioteca del lector. 67 casos
+  de prueba sobre las reglas de visibilidad y propiedad (60% de la capa de
+  servicio). Pendiente: tests de repositorio contra una BD real.
 - Gateway probado end-to-end: transcoding, CORS y rate limiting a 80 req/min por IP.
+- Fuera de alcance por ahora: likes, comentarios y ratings, que irían en un
+  `interaction-service` aparte.

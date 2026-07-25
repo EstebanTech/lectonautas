@@ -46,6 +46,37 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Igual que user-migrate, pero antes crea la base: POSTGRES_DB solo crea la
+  # primera del contenedor. Se conecta a la base 'postgres' (siempre existe) para
+  # el CREATE DATABASE, que se hace bajo un IF porque Postgres no tiene
+  # CREATE DATABASE IF NOT EXISTS.
+  library-migrate:
+    image: postgres:16-alpine
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      LIBRARY_DB: ${LIBRARY_SERVICE_DB}
+    volumes:
+      - ./backend/microservices/library-service/migrations:/migrations:ro
+    entrypoint: ["sh", "-c"]
+    # $$ escapa la interpolacion de compose: el $ literal es para el shell.
+    command:
+      - |
+        set -e
+        if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$$LIBRARY_DB'" | grep -q 1; then
+          echo "Creando base $$LIBRARY_DB"
+          psql -d postgres -c "CREATE DATABASE \"$$LIBRARY_DB\""
+        fi
+        for f in $$(ls /migrations/*.up.sql | sort); do
+          echo "Aplicando $$f"
+          psql -d "$$LIBRARY_DB" -v ON_ERROR_STOP=1 -f "$$f"
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   user-service:
     build:
       context: ./backend/microservices/user-service
@@ -62,6 +93,27 @@ services:
         condition: service_started
       user-migrate:
         condition: service_completed_successfully
+
+  library-service:
+    build:
+      context: ./backend/microservices/library-service
+    environment:
+      GRPC_PORT: ${LIBRARY_SERVICE_GRPC_PORT}
+      # Dentro de la red del compose Postgres siempre escucha en 5432
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${LIBRARY_SERVICE_DB}?sslmode=disable
+      # Valkey, para cachear las lecturas (books, sagas, biblioteca del lector)
+      REDIS_ADDR: valkey:6379
+      # No tiene la tabla de sesiones: le pregunta a user-service por cada token
+      USER_SERVICE_ADDR: user-service:${USER_SERVICE_GRPC_PORT}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+      library-migrate:
+        condition: service_completed_successfully
+      user-service:
+        condition: service_started
 
   valkey:
     image: valkey/valkey:8-alpine
@@ -91,9 +143,12 @@ services:
     image: envoyproxy/envoy:v1.31-latest
     volumes:
       - ./gateway/envoy.yaml:/etc/envoy/envoy.yaml:ro
-      - ./gateway/proto/user_service.pb:/etc/envoy/proto/user_service.pb:ro
+      # Un solo descriptor con todos los servicios: lo genera `make proto-descriptor`
+      # en la raíz. Al regenerarlo hay que reiniciar el gateway para que lo recargue.
+      - ./gateway/proto/services.pb:/etc/envoy/proto/services.pb:ro
     depends_on:
       - user-service
+      - library-service
       - ratelimit
     ports:
       - "${GATEWAY_HTTP_PORT}:8080"
