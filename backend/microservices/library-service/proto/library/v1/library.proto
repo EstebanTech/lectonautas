@@ -1,0 +1,446 @@
+syntax = "proto3";
+
+package library.v1;
+
+option go_package = "github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/proto/library/v1;libraryv1";
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+// LibraryService expone los dos modulos internos del servicio (content y
+// reader) detras de una sola API: el cliente no distingue modulos.
+//
+// El token de sesion viaja en el header "Authorization: Bearer <token>" y se
+// resuelve contra user-service (rpc ValidateSession), que es el unico dueno de
+// la tabla de sesiones.
+service LibraryService {
+  // --- content: libros ----------------------------------------------------
+
+  // Crea el libro junto a su primer capitulo, en una sola transaccion: nunca
+  // queda un libro sin capitulos.
+  rpc CreateBook(CreateBookRequest) returns (BookResponse) {
+    option (google.api.http) = {
+      post: "/v1/books"
+      body: "*"
+    };
+  }
+  // Listado publico y paginado: solo devuelve libros publicados, con o sin
+  // token. Para ver los propios en cualquier estado esta ListMyBooks.
+  rpc ListBooks(ListBooksRequest) returns (ListBooksResponse) {
+    option (google.api.http) = {
+      get: "/v1/books"
+    };
+  }
+  // Los libros del autor autenticado, en cualquier estado.
+  //
+  // No recibe author_id a proposito: sale del token y no del cliente, que es
+  // lo unico que impide pedir la biblioteca privada de otro. La ruta literal
+  // "mine" gana contra {id} en el matcher del transcoder, asi que no choca con
+  // GetBook.
+  rpc ListMyBooks(ListMyBooksRequest) returns (ListBooksResponse) {
+    option (google.api.http) = {
+      get: "/v1/books/mine"
+    };
+  }
+  // Devuelve el libro con sus capitulos.
+  rpc GetBook(GetBookRequest) returns (BookDetailResponse) {
+    option (google.api.http) = {
+      get: "/v1/books/{id}"
+    };
+  }
+  rpc UpdateBook(UpdateBookRequest) returns (BookResponse) {
+    option (google.api.http) = {
+      patch: "/v1/books/{id}"
+      body: "*"
+    };
+  }
+  // Borra el libro y, por CASCADE, todos sus capitulos.
+  rpc DeleteBook(DeleteBookRequest) returns (DeleteResponse) {
+    option (google.api.http) = {
+      delete: "/v1/books/{id}"
+    };
+  }
+
+  // --- content: capitulos -------------------------------------------------
+
+  rpc CreateChapter(CreateChapterRequest) returns (ChapterResponse) {
+    option (google.api.http) = {
+      post: "/v1/books/{book_id}/chapters"
+      body: "*"
+    };
+  }
+  rpc GetChapter(GetChapterRequest) returns (ChapterResponse) {
+    option (google.api.http) = {
+      get: "/v1/books/{book_id}/chapters/{id}"
+    };
+  }
+  rpc UpdateChapter(UpdateChapterRequest) returns (ChapterResponse) {
+    option (google.api.http) = {
+      patch: "/v1/books/{book_id}/chapters/{id}"
+      body: "*"
+    };
+  }
+  // Falla si es el ultimo capitulo del libro: un libro siempre conserva al
+  // menos uno. Para vaciarlo del todo hay que borrar el libro.
+  rpc DeleteChapter(DeleteChapterRequest) returns (DeleteResponse) {
+    option (google.api.http) = {
+      delete: "/v1/books/{book_id}/chapters/{id}"
+    };
+  }
+  // Recibe TODOS los capitulos del libro en el orden deseado y les reasigna
+  // position 1..N. La ruta literal "reorder" gana contra {id} en el matcher
+  // del transcoder, asi que no choca con GetChapter.
+  rpc ReorderChapters(ReorderChaptersRequest) returns (ReorderChaptersResponse) {
+    option (google.api.http) = {
+      patch: "/v1/books/{book_id}/chapters/reorder"
+      body: "*"
+    };
+  }
+
+  // --- content: sagas -----------------------------------------------------
+
+  rpc CreateSaga(CreateSagaRequest) returns (SagaResponse) {
+    option (google.api.http) = {
+      post: "/v1/sagas"
+      body: "*"
+    };
+  }
+  // Listado publico y paginado de sagas.
+  rpc ListSagas(ListSagasRequest) returns (ListSagasResponse) {
+    option (google.api.http) = {
+      get: "/v1/sagas"
+    };
+  }
+  // Las sagas del autor autenticado. Como en ListMyBooks, el author_id sale
+  // del token y no de la peticion.
+  rpc ListMySagas(ListMySagasRequest) returns (ListSagasResponse) {
+    option (google.api.http) = {
+      get: "/v1/sagas/mine"
+    };
+  }
+  // Devuelve la saga con sus libros ya ordenados por position.
+  rpc GetSaga(GetSagaRequest) returns (SagaDetailResponse) {
+    option (google.api.http) = {
+      get: "/v1/sagas/{id}"
+    };
+  }
+  rpc UpdateSaga(UpdateSagaRequest) returns (SagaResponse) {
+    option (google.api.http) = {
+      patch: "/v1/sagas/{id}"
+      body: "*"
+    };
+  }
+  rpc DeleteSaga(DeleteSagaRequest) returns (DeleteResponse) {
+    option (google.api.http) = {
+      delete: "/v1/sagas/{id}"
+    };
+  }
+  // Vincular un libro no es un CRUD propio: es una accion sobre la saga.
+  rpc AddBookToSaga(AddBookToSagaRequest) returns (SagaDetailResponse) {
+    option (google.api.http) = {
+      post: "/v1/sagas/{saga_id}/books"
+      body: "*"
+    };
+  }
+  rpc RemoveBookFromSaga(RemoveBookFromSagaRequest) returns (DeleteResponse) {
+    option (google.api.http) = {
+      delete: "/v1/sagas/{saga_id}/books/{book_id}"
+    };
+  }
+  rpc ReorderSagaBooks(ReorderSagaBooksRequest) returns (SagaDetailResponse) {
+    option (google.api.http) = {
+      patch: "/v1/sagas/{saga_id}/books/reorder"
+      body: "*"
+    };
+  }
+
+  // --- reader: biblioteca del lector --------------------------------------
+
+  rpc SaveBook(SaveBookRequest) returns (SavedBookResponse) {
+    option (google.api.http) = {
+      post: "/v1/library"
+      body: "*"
+    };
+  }
+  rpc ListSavedBooks(ListSavedBooksRequest) returns (ListSavedBooksResponse) {
+    option (google.api.http) = {
+      get: "/v1/library"
+    };
+  }
+  // Si kind viene vacio, quita el libro de ambas categorias.
+  rpc UnsaveBook(UnsaveBookRequest) returns (DeleteResponse) {
+    option (google.api.http) = {
+      delete: "/v1/library/{book_id}"
+    };
+  }
+}
+
+// --- Entidades -------------------------------------------------------------
+
+// status: draft / published / archived.
+message Book {
+  string id = 1;
+  string author_id = 2;
+  string title = 3;
+  string description = 4;
+  string cover_url = 5;
+  string status = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// status: draft / published.
+message Chapter {
+  string id = 1;
+  string book_id = 2;
+  string title = 3;
+  string content = 4;
+  int32 position = 5;
+  string status = 6;
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message Saga {
+  string id = 1;
+  string author_id = 2;
+  string title = 3;
+  string description = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+}
+
+// kind: favorite / read_later.
+message SavedBook {
+  string id = 1;
+  string user_id = 2;
+  string kind = 3;
+  google.protobuf.Timestamp created_at = 4;
+  // Datos del libro guardado, para que el cliente no tenga que pedirlo aparte.
+  Book book = 5;
+}
+
+// --- Libros ----------------------------------------------------------------
+
+// El primer capitulo es parte de la creacion del libro: se insertan juntos.
+message FirstChapter {
+  string title = 1;
+  string content = 2;
+}
+
+message CreateBookRequest {
+  string title = 1;
+  string description = 2;
+  string cover_url = 3;
+  // draft (por defecto) / published / archived.
+  string status = 4;
+  // Si se omite, el capitulo se crea con un titulo por defecto.
+  FirstChapter first_chapter = 5;
+}
+
+message ListBooksRequest {
+  // Paginacion 1-based. page_size por defecto 20, maximo 100.
+  int32 page = 1;
+  int32 page_size = 2;
+  // Filtra por autor, pero solo entre sus libros publicados.
+  string author_id = 3;
+  // Reservado: este listado siempre es published. Solo se acepta ese valor.
+  string status = 4;
+  // Busqueda por titulo (case-insensitive, subcadena).
+  string search = 5;
+}
+
+// Sin campo author_id: el autor es siempre el dueno del token. Aceptarlo del
+// cliente seria justamente el agujero que este endpoint evita.
+message ListMyBooksRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+  // Filtro opcional: draft / published / archived. Vacio trae los tres.
+  string status = 3;
+  string search = 4;
+}
+
+message ListBooksResponse {
+  repeated Book books = 1;
+  // Total de libros que cumplen el filtro, no cuantos trae esta pagina.
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message GetBookRequest {
+  string id = 1;
+}
+
+message BookResponse {
+  Book book = 1;
+}
+
+// El libro con sus capitulos. Un lector solo ve los capitulos publicados;
+// el autor ve tambien los suyos en borrador.
+message BookDetailResponse {
+  Book book = 1;
+  repeated Chapter chapters = 2;
+}
+
+message UpdateBookRequest {
+  string id = 1;
+  optional string title = 2;
+  optional string description = 3;
+  optional string cover_url = 4;
+  optional string status = 5;
+}
+
+message DeleteBookRequest {
+  string id = 1;
+}
+
+message DeleteResponse {
+  bool success = 1;
+}
+
+// --- Capitulos -------------------------------------------------------------
+
+message CreateChapterRequest {
+  string book_id = 1;
+  string title = 2;
+  string content = 3;
+  // draft (por defecto) / published.
+  string status = 4;
+  // Posicion deseada. Si se omite (o es 0), se agrega al final.
+  int32 position = 5;
+}
+
+message GetChapterRequest {
+  string book_id = 1;
+  string id = 2;
+}
+
+message UpdateChapterRequest {
+  string book_id = 1;
+  string id = 2;
+  optional string title = 3;
+  optional string content = 4;
+  optional string status = 5;
+}
+
+message DeleteChapterRequest {
+  string book_id = 1;
+  string id = 2;
+}
+
+// chapter_ids debe traer TODOS los capitulos del libro, en el orden deseado.
+message ReorderChaptersRequest {
+  string book_id = 1;
+  repeated string chapter_ids = 2;
+}
+
+message ReorderChaptersResponse {
+  repeated Chapter chapters = 1;
+}
+
+message ChapterResponse {
+  Chapter chapter = 1;
+}
+
+// --- Sagas -----------------------------------------------------------------
+
+message CreateSagaRequest {
+  string title = 1;
+  string description = 2;
+}
+
+message ListSagasRequest {
+  // Paginacion 1-based. page_size por defecto 20, maximo 100.
+  int32 page = 1;
+  int32 page_size = 2;
+  // Filtro opcional por autor.
+  string author_id = 3;
+  // Busqueda por titulo (case-insensitive, subcadena).
+  string search = 4;
+}
+
+// Sin campo author_id: el autor sale del token.
+message ListMySagasRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+  string search = 3;
+}
+
+message ListSagasResponse {
+  repeated Saga sagas = 1;
+  // Total de sagas que cumplen el filtro, no cuantas trae esta pagina.
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message GetSagaRequest {
+  string id = 1;
+}
+
+message UpdateSagaRequest {
+  string id = 1;
+  optional string title = 2;
+  optional string description = 3;
+}
+
+message DeleteSagaRequest {
+  string id = 1;
+}
+
+message SagaResponse {
+  Saga saga = 1;
+}
+
+message SagaDetailResponse {
+  Saga saga = 1;
+  // Libros de la saga, ordenados por su position dentro de ella.
+  repeated Book books = 2;
+}
+
+message AddBookToSagaRequest {
+  string saga_id = 1;
+  string book_id = 2;
+  // Si se omite (o es 0), el libro se agrega al final.
+  int32 position = 3;
+}
+
+message RemoveBookFromSagaRequest {
+  string saga_id = 1;
+  string book_id = 2;
+}
+
+// book_ids debe traer TODOS los libros de la saga, en el orden deseado.
+message ReorderSagaBooksRequest {
+  string saga_id = 1;
+  repeated string book_ids = 2;
+}
+
+// --- Biblioteca del lector -------------------------------------------------
+
+message SaveBookRequest {
+  string book_id = 1;
+  // favorite / read_later.
+  string kind = 2;
+}
+
+message ListSavedBooksRequest {
+  // Filtro opcional: sin kind devuelve favoritos y read_later juntos.
+  string kind = 1;
+}
+
+message ListSavedBooksResponse {
+  repeated SavedBook saved_books = 1;
+  int32 total = 2;
+}
+
+message UnsaveBookRequest {
+  string book_id = 1;
+  // Opcional: sin kind quita el libro de ambas categorias.
+  string kind = 2;
+}
+
+message SavedBookResponse {
+  SavedBook saved_book = 1;
+}
