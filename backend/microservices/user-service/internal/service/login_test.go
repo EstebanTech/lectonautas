@@ -8,9 +8,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/domain"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/token"
-	userv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/proto/user/v1"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/domain"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/token"
+	userv1 "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/user/v1"
 )
 
 // ctxConHeader arma el contexto como llega desde Envoy, que reenvia el header

@@ -7,7 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/domain"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
 )
 
 const sagaColumns = `id::text, author_id::text, title, description, created_at, updated_at`
@@ -20,8 +20,8 @@ type SagaRepository interface {
 	Update(ctx context.Context, upd *domain.SagaUpdate) (*domain.Saga, error)
 	Delete(ctx context.Context, id string) error
 	// ListBooks devuelve los libros de la saga ordenados por su position
-	// dentro de ella.
-	ListBooks(ctx context.Context, sagaID string) ([]*domain.Book, error)
+	// dentro de ella. viewerID es quien pregunta, para el conteo de capitulos.
+	ListBooks(ctx context.Context, sagaID, viewerID string) ([]*domain.Book, error)
 	AddBook(ctx context.Context, sagaID, bookID string, position int32) error
 	RemoveBook(ctx context.Context, sagaID, bookID string) error
 	ReorderBooks(ctx context.Context, sagaID string, bookIDs []string) error
@@ -149,15 +149,16 @@ func (r *PostgresSagaRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-func (r *PostgresSagaRepository) ListBooks(ctx context.Context, sagaID string) ([]*domain.Book, error) {
-	const query = `
-		SELECT b.id::text, b.author_id::text, b.title, b.description, b.cover_url, b.status, b.created_at, b.updated_at
+func (r *PostgresSagaRepository) ListBooks(ctx context.Context, sagaID, viewerID string) ([]*domain.Book, error) {
+	query := `
+		SELECT b.id::text, b.author_id::text, b.title, b.description, b.cover_url, b.status, b.created_at, b.updated_at,
+		       ` + chapterCountExpr("b", 2) + `
 		FROM content.saga_books sb
 		JOIN content.books b ON b.id = sb.book_id
 		WHERE sb.saga_id = $1
 		ORDER BY sb.position ASC`
 
-	rows, err := r.pool.Query(ctx, query, sagaID)
+	rows, err := r.pool.Query(ctx, query, sagaID, viewerID)
 	if err != nil {
 		return nil, translateErr(err, ErrSagaNotFound)
 	}

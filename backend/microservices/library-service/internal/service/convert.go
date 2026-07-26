@@ -3,8 +3,8 @@ package service
 import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/domain"
-	libraryv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
+	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
 )
 
 // En proto3 no hay null para los string, asi que las columnas nullables viajan
@@ -21,14 +21,15 @@ func bookToProto(b *domain.Book) *libraryv1.Book {
 		return nil
 	}
 	return &libraryv1.Book{
-		Id:          b.ID,
-		AuthorId:    b.AuthorID,
-		Title:       b.Title,
-		Description: derefString(b.Description),
-		CoverUrl:    derefString(b.CoverURL),
-		Status:      b.Status,
-		CreatedAt:   timestamppb.New(b.CreatedAt),
-		UpdatedAt:   timestamppb.New(b.UpdatedAt),
+		Id:           b.ID,
+		AuthorId:     b.AuthorID,
+		Title:        b.Title,
+		Description:  derefString(b.Description),
+		CoverUrl:     derefString(b.CoverURL),
+		Status:       b.Status,
+		CreatedAt:    timestamppb.New(b.CreatedAt),
+		UpdatedAt:    timestamppb.New(b.UpdatedAt),
+		ChapterCount: b.ChapterCount,
 	}
 }
 

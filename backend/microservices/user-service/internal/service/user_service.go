@@ -14,10 +14,10 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/cache"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/domain"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/repository"
-	userv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/proto/user/v1"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/cache"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/domain"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/repository"
+	userv1 "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/user/v1"
 )
 
 // El username es el handle publico, asi que se mantiene restringido: solo
@@ -59,6 +59,18 @@ type UserCache interface {
 	InvalidateAllUsers(ctx context.Context) error
 }
 
+// ContentDeleter borra en library-service todo lo que cuelga de un usuario. Es
+// el otro lado de la baja de cuenta: los libros, sagas y guardados viven en otra
+// base de datos, asi que no hay un CASCADE de Postgres que los alcance y hay que
+// pedirselo al servicio dueno.
+//
+// Es una interfaz para poder probar la baja sin levantar library-service.
+type ContentDeleter interface {
+	// DeleteAuthorContent tiene que ser idempotente: si el borrado del usuario
+	// falla despues, el cliente reintenta y esto se vuelve a llamar.
+	DeleteAuthorContent(ctx context.Context, userID string) error
+}
+
 // Las implementaciones reales tienen que seguir cumpliendo el contrato.
 var (
 	_ SessionCache = (*cache.SessionCache)(nil)
@@ -71,6 +83,7 @@ type UserService struct {
 	sessions  repository.SessionRepository
 	cache     SessionCache
 	userCache UserCache
+	content   ContentDeleter
 }
 
 func NewUserService(
@@ -78,8 +91,15 @@ func NewUserService(
 	sessions repository.SessionRepository,
 	sessionCache SessionCache,
 	userCache UserCache,
+	content ContentDeleter,
 ) *UserService {
-	return &UserService{repo: repo, sessions: sessions, cache: sessionCache, userCache: userCache}
+	return &UserService{
+		repo:      repo,
+		sessions:  sessions,
+		cache:     sessionCache,
+		userCache: userCache,
+		content:   content,
+	}
 }
 
 func (s *UserService) CreateUser(ctx context.Context, req *userv1.CreateUserRequest) (*userv1.UserResponse, error) {
@@ -137,7 +157,11 @@ func (s *UserService) CreateUser(ctx context.Context, req *userv1.CreateUserRequ
 	return &userv1.UserResponse{User: toProto(created)}, nil
 }
 
-func (s *UserService) GetUser(ctx context.Context, req *userv1.GetUserRequest) (*userv1.UserResponse, error) {
+// GetUser devuelve el perfil publico. No pide token: el id de un autor viaja en
+// cada libro, asi que esto es de acceso publico por diseno, y justo por eso lo
+// que devuelve no puede incluir el email ni el estado de la cuenta. Los datos
+// propios completos salen por GetCurrentUser.
+func (s *UserService) GetUser(ctx context.Context, req *userv1.GetUserRequest) (*userv1.PublicUserResponse, error) {
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
 	}
@@ -147,7 +171,7 @@ func (s *UserService) GetUser(ctx context.Context, req *userv1.GetUserRequest) (
 		return nil, err
 	}
 
-	return &userv1.UserResponse{User: toProto(u)}, nil
+	return &userv1.PublicUserResponse{User: toPublicProto(u)}, nil
 }
 
 // userByID resuelve un usuario con cache-aside: primero Valkey, y si hay miss
@@ -178,6 +202,14 @@ func (s *UserService) userByID(ctx context.Context, id string) (*domain.User, er
 func (s *UserService) UpdateUser(ctx context.Context, req *userv1.UpdateUserRequest) (*userv1.UserResponse, error) {
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+
+	// Una cuenta solo la edita su dueno. El id sigue en la ruta por comodidad
+	// del cliente, pero quien manda es el token: sin este chequeo bastaba con
+	// conocer un id ajeno (y los ids de autor son publicos, van en cada libro)
+	// para reescribir el perfil de cualquiera.
+	if err := s.requireSelf(ctx, req.GetId()); err != nil {
+		return nil, err
 	}
 
 	upd := &domain.UserUpdate{ID: req.GetId()}
@@ -233,9 +265,27 @@ func (s *UserService) UpdateUser(ctx context.Context, req *userv1.UpdateUserRequ
 	return &userv1.UserResponse{User: toProto(updated)}, nil
 }
 
+// DeleteUser da de baja la cuenta del llamante y, con ella, todo lo que colgaba
+// del usuario: sus sesiones (CASCADE en esta misma base) y su contenido en
+// library-service, que se borra antes por gRPC.
+//
+// El contenido va primero a proposito. Si fallara, la cuenta sigue en pie y el
+// cliente puede reintentar; al reves quedaria obra sin dueno y sin forma de
+// llegar a ella, porque el author_id apunta a un usuario que ya no existe.
 func (s *UserService) DeleteUser(ctx context.Context, req *userv1.DeleteUserRequest) (*userv1.DeleteUserResponse, error) {
 	if req.GetId() == "" {
 		return nil, status.Error(codes.InvalidArgument, "id is required")
+	}
+
+	// Solo el dueno puede darse de baja: es la operacion mas destructiva de la
+	// API y con la cascada se lleva por delante toda su obra.
+	if err := s.requireSelf(ctx, req.GetId()); err != nil {
+		return nil, err
+	}
+
+	if err := s.content.DeleteAuthorContent(ctx, req.GetId()); err != nil {
+		log.Printf("delete author content failed: %v", err)
+		return nil, status.Error(codes.Internal, "failed to delete the account content")
 	}
 
 	if err := s.repo.Delete(ctx, req.GetId()); err != nil {
@@ -245,8 +295,26 @@ func (s *UserService) DeleteUser(ctx context.Context, req *userv1.DeleteUserRequ
 	if err := s.userCache.InvalidateUser(ctx, req.GetId()); err != nil {
 		log.Printf("user cache invalidate failed: %v", err)
 	}
+	// El listado completo quedo viejo: le sobra este usuario.
+	if err := s.userCache.InvalidateAllUsers(ctx); err != nil {
+		log.Printf("all users cache invalidate failed: %v", err)
+	}
 
 	return &userv1.DeleteUserResponse{Success: true}, nil
+}
+
+// requireSelf exige un token valido y que sea el del propio usuario que se va a
+// tocar. Responde PermissionDenied (y no NotFound) porque la existencia de la
+// cuenta ya es publica: GetUser la devuelve sin token.
+func (s *UserService) requireSelf(ctx context.Context, id string) error {
+	callerID, err := s.authenticate(ctx)
+	if err != nil {
+		return err
+	}
+	if callerID != id {
+		return status.Error(codes.PermissionDenied, "you can only modify your own account")
+	}
+	return nil
 }
 
 // GetAllUsers devuelve todos los usuarios, sin paginacion ni filtros. Tambien
@@ -268,9 +336,10 @@ func (s *UserService) GetAllUsers(ctx context.Context, _ *userv1.GetAllUsersRequ
 		}
 	}
 
-	out := make([]*userv1.User, 0, len(users))
+	// Perfiles publicos: este listado tampoco pide token.
+	out := make([]*userv1.PublicUser, 0, len(users))
 	for _, u := range users {
-		out = append(out, toProto(u))
+		out = append(out, toPublicProto(u))
 	}
 
 	return &userv1.GetAllUsersResponse{Users: out, Total: int32(len(out))}, nil
@@ -347,6 +416,9 @@ func mapRepoErr(err error, fallback string) error {
 	}
 }
 
+// toProto arma la vista completa, con email. Solo puede usarse en respuestas
+// que van hacia el propio dueno de la cuenta: CreateUser, Login, GetCurrentUser
+// y UpdateUser. Todo lo demas usa toPublicProto.
 func toProto(u *domain.User) *userv1.User {
 	return &userv1.User{
 		Id:          u.ID,
@@ -358,6 +430,19 @@ func toProto(u *domain.User) *userv1.User {
 		IsActive:    u.IsActive,
 		CreatedAt:   timestamppb.New(u.CreatedAt),
 		UpdatedAt:   timestamppb.New(u.UpdatedAt),
+	}
+}
+
+// toPublicProto arma la vista que puede ver cualquiera. El tipo de destino no
+// tiene campo email, asi que aqui no hay nada que recordar omitir.
+func toPublicProto(u *domain.User) *userv1.PublicUser {
+	return &userv1.PublicUser{
+		Id:          u.ID,
+		Username:    u.Username,
+		DisplayName: deref(u.DisplayName),
+		AvatarUrl:   deref(u.AvatarURL),
+		Bio:         deref(u.Bio),
+		CreatedAt:   timestamppb.New(u.CreatedAt),
 	}
 }
 

@@ -5,7 +5,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/domain"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
 )
 
 type SavedBookRepository interface {
@@ -39,8 +39,9 @@ func (r *PostgresSavedBookRepository) Save(ctx context.Context, userID, bookID, 
 
 	// El libro se trae aparte para devolver la entrada ya completa; el INSERT
 	// no puede hacer el JOIN con content.books en el mismo RETURNING.
-	const bookQuery = `SELECT ` + bookColumns + ` FROM content.books WHERE id = $1`
-	book, err := scanBook(r.pool.QueryRow(ctx, bookQuery, bookID))
+	bookQuery := `SELECT ` + bookColumns + `, ` + chapterCountExpr("content.books", 2) +
+		` FROM content.books WHERE id = $1`
+	book, err := scanBook(r.pool.QueryRow(ctx, bookQuery, bookID, userID))
 	if err != nil {
 		return nil, translateErr(err, ErrBookNotFound)
 	}
@@ -52,16 +53,22 @@ func (r *PostgresSavedBookRepository) Save(ctx context.Context, userID, bookID, 
 // ListByUser hace el JOIN con content.books, posible porque los dos esquemas
 // viven en la misma base de datos.
 func (r *PostgresSavedBookRepository) ListByUser(ctx context.Context, userID, kind string) ([]*domain.SavedBook, error) {
+	// El viewer del conteo es el propio lector: de sus libros ve todos los
+	// capitulos y de los ajenos solo los publicados. Va como parametro propio
+	// ($2) aunque lleve el mismo valor que $1: alli se compara contra un uuid y
+	// aqui contra text (por el NULLIF), y Postgres no puede inferir los dos
+	// tipos para el mismo parametro.
 	query := `
 		SELECT sb.id::text, sb.user_id::text, sb.kind, sb.created_at,
-		       b.id::text, b.author_id::text, b.title, b.description, b.cover_url, b.status, b.created_at, b.updated_at
+		       b.id::text, b.author_id::text, b.title, b.description, b.cover_url, b.status, b.created_at, b.updated_at,
+		       ` + chapterCountExpr("b", 2) + `
 		FROM reader.saved_books sb
 		JOIN content.books b ON b.id = sb.book_id
 		WHERE sb.user_id = $1`
-	args := []any{userID}
+	args := []any{userID, userID}
 
 	if kind != "" {
-		query += ` AND sb.kind = $2`
+		query += ` AND sb.kind = $3`
 		args = append(args, kind)
 	}
 	query += ` ORDER BY sb.created_at DESC`
@@ -79,6 +86,7 @@ func (r *PostgresSavedBookRepository) ListByUser(ctx context.Context, userID, ki
 			&sb.ID, &sb.UserID, &sb.Kind, &sb.CreatedAt,
 			&sb.Book.ID, &sb.Book.AuthorID, &sb.Book.Title, &sb.Book.Description,
 			&sb.Book.CoverURL, &sb.Book.Status, &sb.Book.CreatedAt, &sb.Book.UpdatedAt,
+			&sb.Book.ChapterCount,
 		)
 		if err != nil {
 			return nil, err

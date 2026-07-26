@@ -9,11 +9,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/auth"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/cache"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/domain"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/repository"
-	libraryv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/auth"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/cache"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/repository"
+	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
 )
 
 // Limites de longitud, alineados con los tipos de las migraciones.
@@ -25,9 +25,6 @@ const (
 
 	defaultPageSize = 20
 	maxPageSize     = 100
-
-	// Titulo del capitulo inicial cuando CreateBook no trae uno.
-	defaultFirstChapterTitle = "Chapter 1"
 )
 
 // Authenticator resuelve la identidad del llamante. Es una interfaz y no el
@@ -132,7 +129,7 @@ func (s *LibraryService) invalidate(ctx context.Context) {
 // ownedBook trae el libro y verifica que el llamante sea su autor. Es el
 // chequeo de propiedad que precede a toda escritura sobre libros y capitulos.
 func (s *LibraryService) ownedBook(ctx context.Context, bookID, callerID string) (*domain.Book, error) {
-	book, err := s.books.GetByID(ctx, bookID)
+	book, err := s.books.GetByID(ctx, bookID, callerID)
 	if err != nil {
 		return nil, mapRepoErr(err, "failed to load book")
 	}
@@ -154,11 +151,29 @@ func (s *LibraryService) ownedSaga(ctx context.Context, sagaID, callerID string)
 	return saga, nil
 }
 
+// chapterCount cuenta los capitulos del libro, en cualquier estado. Es la
+// consulta que sostiene la invariante del servicio: un libro publicado no esta
+// vacio.
+//
+// Antes la garantia era mas fuerte (todo libro nacia con un capitulo, y no se
+// podia borrar el ultimo), pero eso obligaba a crear el libro y su contenido de
+// una sola vez. Ahora el libro nace vacio y solo se le exige tener contenido
+// para salir del borrador. Que ese contenido este publicado o no es decision
+// del autor: puede publicar la ficha del libro e ir soltando los capitulos
+// despues.
+func (s *LibraryService) chapterCount(ctx context.Context, bookID string) (int, error) {
+	n, err := s.chapters.CountByBook(ctx, bookID)
+	if err != nil {
+		return 0, mapRepoErr(err, "failed to count chapters")
+	}
+	return n, nil
+}
+
 // visibleBook aplica la regla de visibilidad de lectura: el autor ve el libro
 // en cualquier estado, y cualquier otro solo si esta publicado. Un borrador
 // ajeno responde NotFound, no PermissionDenied: que exista tampoco es publico.
 func (s *LibraryService) visibleBook(ctx context.Context, bookID, callerID string) (*domain.Book, bool, error) {
-	book, err := s.books.GetByID(ctx, bookID)
+	book, err := s.books.GetByID(ctx, bookID, callerID)
 	if err != nil {
 		return nil, false, mapRepoErr(err, "failed to load book")
 	}
@@ -324,8 +339,6 @@ func mapRepoErr(err error, fallback string) error {
 		return status.Error(codes.AlreadyExists, "book already belongs to this saga")
 	case errors.Is(err, repository.ErrPositionTaken):
 		return status.Error(codes.AlreadyExists, "another chapter already occupies that position")
-	case errors.Is(err, repository.ErrLastChapter):
-		return status.Error(codes.FailedPrecondition, "cannot delete the last chapter of a book")
 	case errors.Is(err, repository.ErrReorderMismatch):
 		return status.Error(codes.InvalidArgument, "the list must contain every item exactly once")
 	default:

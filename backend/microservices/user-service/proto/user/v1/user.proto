@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package user.v1;
 
-option go_package = "github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/proto/user/v1;userv1";
+option go_package = "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/user/v1;userv1";
 
 import "google/api/annotations.proto";
 import "google/protobuf/timestamp.proto";
@@ -14,23 +14,35 @@ service UserService {
       body: "*"
     };
   }
-  rpc GetUser(GetUserRequest) returns (UserResponse) {
+  // Devuelve el perfil publico: no lleva email ni is_active. Cualquiera puede
+  // pedirlo, y el id de un autor viaja en cada libro, asi que lo que devuelve
+  // este endpoint es efectivamente publico. Para los datos propios completos
+  // esta GetCurrentUser, que exige token.
+  rpc GetUser(GetUserRequest) returns (PublicUserResponse) {
     option (google.api.http) = {
       get: "/v1/users/{id}"
     };
   }
+  // Solo el dueno de la cuenta, con su token. Devuelve el usuario completo
+  // porque quien lo recibe es el propio dueno.
   rpc UpdateUser(UpdateUserRequest) returns (UserResponse) {
     option (google.api.http) = {
       patch: "/v1/users/{id}"
       body: "*"
     };
   }
+  // Da de baja la cuenta del llamante. Solo el dueno, con su token.
+  //
+  // Es un borrado en cascada y no tiene vuelta atras: se lleva sus sesiones y,
+  // por gRPC contra library-service, sus libros con todos sus capitulos, sus
+  // sagas y su biblioteca de guardados.
   rpc DeleteUser(DeleteUserRequest) returns (DeleteUserResponse) {
     option (google.api.http) = {
       delete: "/v1/users/{id}"
     };
   }
-  // Devuelve todos los usuarios, sin paginacion ni filtros.
+  // Devuelve todos los usuarios, sin paginacion ni filtros. Perfiles publicos:
+  // sin email ni is_active.
   rpc GetAllUsers(GetAllUsersRequest) returns (GetAllUsersResponse) {
     option (google.api.http) = {
       get: "/v1/users"
@@ -69,6 +81,10 @@ service UserService {
   rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse);
 }
 
+// User son los datos completos de la cuenta, incluido el email. Solo viaja
+// hacia su propio dueno: CreateUser, Login, GetCurrentUser y UpdateUser. Todo
+// lo que pueda pedir un tercero usa PublicUser.
+//
 // El password nunca se expone: solo se acepta al crear el usuario.
 message User {
   string id = 1;
@@ -80,6 +96,31 @@ message User {
   bool is_active = 7;
   google.protobuf.Timestamp created_at = 8;
   google.protobuf.Timestamp updated_at = 9;
+}
+
+// PublicUser es el perfil que ve cualquiera: lo justo para mostrar la ficha de
+// un autor junto a sus libros.
+//
+// Es un mensaje aparte y no un User con campos vacios a proposito. El email no
+// existe en este tipo, asi que no hay forma de filtrarlo por descuido en un
+// cambio futuro: no compilaria. Los numeros de campo se mantienen iguales a los
+// de User para que las dos vistas se lean sin sorpresas.
+//
+// Fuera quedan a proposito:
+//   - email: es la credencial de acceso y un dato personal.
+//   - is_active: el estado de una cuenta no es asunto de terceros.
+//   - updated_at: delata actividad de la cuenta sin aportar nada publico.
+message PublicUser {
+  string id = 1;
+  string username = 3;
+  string display_name = 4;
+  string avatar_url = 5;
+  string bio = 6;
+  // Fecha de alta, para un "miembro desde" en la ficha del autor.
+  google.protobuf.Timestamp created_at = 8;
+
+  reserved 2, 7, 9;
+  reserved "email", "is_active", "updated_at";
 }
 
 message CreateUserRequest {
@@ -119,7 +160,9 @@ message DeleteUserResponse {
 message GetAllUsersRequest {}
 
 message GetAllUsersResponse {
-  repeated User users = 1;
+  // Perfiles publicos: este listado no lleva token, asi que no puede llevar
+  // emails.
+  repeated PublicUser users = 1;
   // total es simplemente cuantos usuarios trae la respuesta; se mantiene por
   // comodidad del cliente.
   int32 total = 2;
@@ -127,6 +170,10 @@ message GetAllUsersResponse {
 
 message UserResponse {
   User user = 1;
+}
+
+message PublicUserResponse {
+  PublicUser user = 1;
 }
 
 message LoginRequest {

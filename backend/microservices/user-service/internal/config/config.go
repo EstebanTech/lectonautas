@@ -9,6 +9,9 @@ type Config struct {
 	GRPCPort    string
 	DatabaseURL string
 	RedisAddr   string
+	// LibraryAddr es library-service, al que se le pide borrar el contenido de
+	// una cuenta que se da de baja.
+	LibraryAddr string
 }
 
 // Load resuelve la configuración del servicio. Dentro de docker, el compose
@@ -19,6 +22,7 @@ func Load() (*Config, error) {
 		GRPCPort:    firstNonEmpty(os.Getenv("GRPC_PORT"), os.Getenv("USER_SERVICE_GRPC_PORT"), "50051"),
 		DatabaseURL: firstNonEmpty(os.Getenv("DATABASE_URL"), os.Getenv("USER_SERVICE_DATABASE_URL")),
 		RedisAddr:   firstNonEmpty(os.Getenv("REDIS_ADDR"), os.Getenv("USER_SERVICE_REDIS_ADDR"), "localhost:6379"),
+		LibraryAddr: firstNonEmpty(os.Getenv("LIBRARY_SERVICE_ADDR"), "library-service:50052"),
 	}
 
 	if cfg.DatabaseURL == "" {

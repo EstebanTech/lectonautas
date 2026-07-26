@@ -35,10 +35,22 @@ const (
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type UserServiceClient interface {
 	CreateUser(ctx context.Context, in *CreateUserRequest, opts ...grpc.CallOption) (*UserResponse, error)
-	GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*UserResponse, error)
+	// Devuelve el perfil publico: no lleva email ni is_active. Cualquiera puede
+	// pedirlo, y el id de un autor viaja en cada libro, asi que lo que devuelve
+	// este endpoint es efectivamente publico. Para los datos propios completos
+	// esta GetCurrentUser, que exige token.
+	GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*PublicUserResponse, error)
+	// Solo el dueno de la cuenta, con su token. Devuelve el usuario completo
+	// porque quien lo recibe es el propio dueno.
 	UpdateUser(ctx context.Context, in *UpdateUserRequest, opts ...grpc.CallOption) (*UserResponse, error)
+	// Da de baja la cuenta del llamante. Solo el dueno, con su token.
+	//
+	// Es un borrado en cascada y no tiene vuelta atras: se lleva sus sesiones y,
+	// por gRPC contra library-service, sus libros con todos sus capitulos, sus
+	// sagas y su biblioteca de guardados.
 	DeleteUser(ctx context.Context, in *DeleteUserRequest, opts ...grpc.CallOption) (*DeleteUserResponse, error)
-	// Devuelve todos los usuarios, sin paginacion ni filtros.
+	// Devuelve todos los usuarios, sin paginacion ni filtros. Perfiles publicos:
+	// sin email ni is_active.
 	GetAllUsers(ctx context.Context, in *GetAllUsersRequest, opts ...grpc.CallOption) (*GetAllUsersResponse, error)
 	// Autenticacion basada en tokens de sesion.
 	Login(ctx context.Context, in *LoginRequest, opts ...grpc.CallOption) (*LoginResponse, error)
@@ -75,9 +87,9 @@ func (c *userServiceClient) CreateUser(ctx context.Context, in *CreateUserReques
 	return out, nil
 }
 
-func (c *userServiceClient) GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*UserResponse, error) {
+func (c *userServiceClient) GetUser(ctx context.Context, in *GetUserRequest, opts ...grpc.CallOption) (*PublicUserResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(UserResponse)
+	out := new(PublicUserResponse)
 	err := c.cc.Invoke(ctx, UserService_GetUser_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -160,10 +172,22 @@ func (c *userServiceClient) ValidateSession(ctx context.Context, in *ValidateSes
 // for forward compatibility.
 type UserServiceServer interface {
 	CreateUser(context.Context, *CreateUserRequest) (*UserResponse, error)
-	GetUser(context.Context, *GetUserRequest) (*UserResponse, error)
+	// Devuelve el perfil publico: no lleva email ni is_active. Cualquiera puede
+	// pedirlo, y el id de un autor viaja en cada libro, asi que lo que devuelve
+	// este endpoint es efectivamente publico. Para los datos propios completos
+	// esta GetCurrentUser, que exige token.
+	GetUser(context.Context, *GetUserRequest) (*PublicUserResponse, error)
+	// Solo el dueno de la cuenta, con su token. Devuelve el usuario completo
+	// porque quien lo recibe es el propio dueno.
 	UpdateUser(context.Context, *UpdateUserRequest) (*UserResponse, error)
+	// Da de baja la cuenta del llamante. Solo el dueno, con su token.
+	//
+	// Es un borrado en cascada y no tiene vuelta atras: se lleva sus sesiones y,
+	// por gRPC contra library-service, sus libros con todos sus capitulos, sus
+	// sagas y su biblioteca de guardados.
 	DeleteUser(context.Context, *DeleteUserRequest) (*DeleteUserResponse, error)
-	// Devuelve todos los usuarios, sin paginacion ni filtros.
+	// Devuelve todos los usuarios, sin paginacion ni filtros. Perfiles publicos:
+	// sin email ni is_active.
 	GetAllUsers(context.Context, *GetAllUsersRequest) (*GetAllUsersResponse, error)
 	// Autenticacion basada en tokens de sesion.
 	Login(context.Context, *LoginRequest) (*LoginResponse, error)
@@ -193,7 +217,7 @@ type UnimplementedUserServiceServer struct{}
 func (UnimplementedUserServiceServer) CreateUser(context.Context, *CreateUserRequest) (*UserResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateUser not implemented")
 }
-func (UnimplementedUserServiceServer) GetUser(context.Context, *GetUserRequest) (*UserResponse, error) {
+func (UnimplementedUserServiceServer) GetUser(context.Context, *GetUserRequest) (*PublicUserResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetUser not implemented")
 }
 func (UnimplementedUserServiceServer) UpdateUser(context.Context, *UpdateUserRequest) (*UserResponse, error) {

@@ -6,8 +6,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/domain"
-	libraryv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
+	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
 )
 
 // Toda escritura sobre libros, capitulos y sagas exige ser el autor. Estas
@@ -37,7 +37,9 @@ func TestEscrituras_SoloElAutor(t *testing.T) {
 			return err
 		}},
 		{"DeleteChapter", func(ctx context.Context, s *LibraryService) error {
-			_, err := s.DeleteChapter(ctx, &libraryv1.DeleteChapterRequest{BookId: bookID, Id: chapterID})
+			// El capitulo en borrador, no el publicado: aqui se prueba quien
+			// puede borrar, no la regla del ultimo capitulo publicado.
+			_, err := s.DeleteChapter(ctx, &libraryv1.DeleteChapterRequest{BookId: bookID, Id: chapter2ID})
 			return err
 		}},
 		{"ReorderChapters", func(ctx context.Context, s *LibraryService) error {
@@ -84,18 +86,102 @@ func TestEscrituras_SoloElAutor(t *testing.T) {
 	}
 }
 
-func TestDeleteChapter_NoSePuedeBorrarElUltimo(t *testing.T) {
+func TestDeleteChapter_NoDejaVacioUnLibroPublicado(t *testing.T) {
 	svc, _ := newTestService(asAuthor())
 	ctx := context.Background()
 
-	// Quedan dos: borrar uno tiene que funcionar.
+	// Quedan dos: borrar uno no vacia el libro.
 	if _, err := svc.DeleteChapter(ctx, &libraryv1.DeleteChapterRequest{BookId: bookID, Id: chapter2ID}); err != nil {
 		t.Fatalf("con dos capitulos deberia poder borrar uno: %v", err)
 	}
 
-	// Queda uno: el libro no puede quedarse sin capitulos.
+	// El ultimo que queda, no: dejaria publicado un libro vacio.
 	_, err := svc.DeleteChapter(ctx, &libraryv1.DeleteChapterRequest{BookId: bookID, Id: chapterID})
 	requireCode(t, err, codes.FailedPrecondition)
+}
+
+// Un libro en borrador si se puede vaciar del todo: es la contraparte de que
+// ahora nazca vacio.
+func TestDeleteChapter_UnBorradorSePuedeVaciar(t *testing.T) {
+	svc, _ := newTestService(asAuthor())
+	ctx := context.Background()
+
+	id := draftBook(svc)
+	chapters := svc.chapters.(*fakeChapterRepo)
+	const soloUno = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	chapters.chapters[soloUno] = &domain.Chapter{
+		ID: soloUno, BookID: id, Title: "Unico", Position: 1, Status: domain.ChapterStatusPublished,
+	}
+
+	if _, err := svc.DeleteChapter(ctx, &libraryv1.DeleteChapterRequest{BookId: id, Id: soloUno}); err != nil {
+		t.Fatalf("un libro en borrador deberia poder quedarse sin capitulos: %v", err)
+	}
+}
+
+// Despublicar un capitulo no vacia el libro: la fila sigue ahi. Que el autor
+// tenga un libro publicado con los capitulos aun en borrador es cosa suya.
+func TestUpdateChapter_DespublicarElUltimoEstaPermitido(t *testing.T) {
+	svc, _ := newTestService(asAuthor())
+	draft := domain.ChapterStatusDraft
+
+	_, err := svc.UpdateChapter(context.Background(), &libraryv1.UpdateChapterRequest{
+		BookId: bookID, Id: chapterID, Status: &draft,
+	})
+
+	if err != nil {
+		t.Fatalf("despublicar un capitulo no deberia estar bloqueado: %v", err)
+	}
+}
+
+// DeleteAuthorContent es lo que llama user-service al dar de baja una cuenta:
+// se lleva la obra de ese autor y solo la de ese autor.
+func TestDeleteAuthorContent_SoloArrastraLoDelAutor(t *testing.T) {
+	svc, cache := newTestService(asAuthor())
+	ctx := context.Background()
+
+	const ajenoID = "77777777-7777-7777-7777-777777777777"
+	svc.books.(*fakeBookRepo).books[ajenoID] = &domain.Book{
+		ID: ajenoID, AuthorID: intruderID, Title: "De otro", Status: domain.BookStatusPublished,
+	}
+
+	resp, err := svc.DeleteAuthorContent(ctx, &libraryv1.DeleteAuthorContentRequest{UserId: authorID})
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if resp.GetBooksDeleted() != 1 {
+		t.Fatalf("libros borrados = %d, se esperaba 1", resp.GetBooksDeleted())
+	}
+
+	libros := svc.books.(*fakeBookRepo).books
+	if _, sigue := libros[bookID]; sigue {
+		t.Fatal("el libro del autor dado de baja sigue ahi")
+	}
+	if _, sigue := libros[ajenoID]; !sigue {
+		t.Fatal("se borro el libro de otro autor")
+	}
+	// Los listados cacheados quedaron viejos: les sobra la obra borrada.
+	if cache.bumps == 0 {
+		t.Fatal("la baja no invalido el cache")
+	}
+}
+
+func TestDeleteAuthorContent_ExigeUserID(t *testing.T) {
+	svc, _ := newTestService(asAuthor())
+
+	_, err := svc.DeleteAuthorContent(context.Background(), &libraryv1.DeleteAuthorContentRequest{})
+
+	requireCode(t, err, codes.InvalidArgument)
+}
+
+// Un libro vacio no sale del borrador, pero se borra sin ninguna traba: no hay
+// forma de quedarse con un libro que no se puede publicar ni eliminar.
+func TestDeleteBook_UnLibroVacioSePuedeBorrar(t *testing.T) {
+	svc, _ := newTestService(asAuthor())
+
+	vacio := draftBook(svc)
+	if _, err := svc.DeleteBook(context.Background(), &libraryv1.DeleteBookRequest{Id: vacio}); err != nil {
+		t.Fatalf("un libro vacio deberia poder borrarse: %v", err)
+	}
 }
 
 func TestDeleteChapter_CapituloInexistenteEs404NoUltimoCapitulo(t *testing.T) {
@@ -144,40 +230,60 @@ func TestReorderChapters_RechazaListaIncompleta(t *testing.T) {
 	requireCode(t, err, codes.InvalidArgument)
 }
 
-func TestCreateBook_SiempreNaceConUnCapitulo(t *testing.T) {
+func TestCreateBook_NaceVacioYEnBorrador(t *testing.T) {
 	svc, _ := newTestService(asAuthor())
+	ctx := context.Background()
 
-	// Sin first_chapter: la regla es que igual se cree uno.
-	_, err := svc.CreateBook(context.Background(), &libraryv1.CreateBookRequest{Title: "Nuevo"})
+	resp, err := svc.CreateBook(ctx, &libraryv1.CreateBookRequest{Title: "Nuevo"})
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
+	if resp.GetBook().GetStatus() != domain.BookStatusDraft {
+		t.Fatalf("status = %q, se esperaba %q", resp.GetBook().GetStatus(), domain.BookStatusDraft)
+	}
 
-	chapters, _ := svc.chapters.ListByBook(context.Background(), bookID, false)
-	if len(chapters) == 0 {
-		t.Fatal("el libro se creo sin capitulos")
+	// El contenido llega despues, por CreateChapter.
+	chapters, _ := svc.chapters.ListByBook(ctx, resp.GetBook().GetId(), false)
+	if len(chapters) != 0 {
+		t.Fatalf("el libro nacio con %d capitulos, se esperaba ninguno", len(chapters))
 	}
 }
 
-func TestCreateBook_PublicadoNaceConSuCapituloPublicado(t *testing.T) {
+// Nacer publicado dejaria a la vista un libro vacio, asi que se rechaza en vez
+// de degradarlo a borrador en silencio.
+func TestCreateBook_NoPuedeNacerPublicado(t *testing.T) {
 	svc, _ := newTestService(asAuthor())
 
 	_, err := svc.CreateBook(context.Background(), &libraryv1.CreateBookRequest{
 		Title:  "Publicado de una",
 		Status: domain.BookStatusPublished,
 	})
-	if err != nil {
-		t.Fatalf("error inesperado: %v", err)
+
+	requireCode(t, err, codes.FailedPrecondition)
+}
+
+func TestUpdateBook_UnLibroVacioNoSePublica(t *testing.T) {
+	svc, _ := newTestService(asAuthor())
+	ctx := context.Background()
+	published := domain.BookStatusPublished
+
+	// draftBook no tiene capitulos: publicarlo tiene que fallar, sin importar
+	// cuantas veces se intente.
+	vacio := draftBook(svc)
+	_, err := svc.UpdateBook(ctx, &libraryv1.UpdateBookRequest{Id: vacio, Status: &published})
+	requireCode(t, err, codes.FailedPrecondition)
+
+	// Un capitulo, aunque este en borrador, ya lo habilita: el libro dejo de
+	// estar vacio y publicar la ficha antes que los capitulos es decision del
+	// autor.
+	chapters := svc.chapters.(*fakeChapterRepo)
+	const enBorrador = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	chapters.chapters[enBorrador] = &domain.Chapter{
+		ID: enBorrador, BookID: vacio, Title: "Uno", Position: 1, Status: domain.ChapterStatusDraft,
 	}
 
-	// Si el capitulo naciera en borrador, el lector veria el libro con la
-	// lista de capitulos vacia.
-	ch, err := svc.chapters.GetByID(context.Background(), bookID, chapterID)
-	if err != nil {
-		t.Fatalf("no se encontro el capitulo inicial: %v", err)
-	}
-	if ch.Status != domain.ChapterStatusPublished {
-		t.Fatalf("el capitulo inicial quedo en %q", ch.Status)
+	if _, err := svc.UpdateBook(ctx, &libraryv1.UpdateBookRequest{Id: vacio, Status: &published}); err != nil {
+		t.Fatalf("con un capitulo deberia poder publicarse: %v", err)
 	}
 }
 

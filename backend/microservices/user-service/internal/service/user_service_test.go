@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -9,8 +10,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/repository"
-	userv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/proto/user/v1"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/repository"
+	userv1 "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/user/v1"
 )
 
 func requireCode(t *testing.T, err error, want codes.Code) {
@@ -180,6 +181,64 @@ func TestGetUser_CacheAside(t *testing.T) {
 	}
 }
 
+// El perfil publico no lleva email ni is_active: GetUser no pide token y el id
+// de un autor viaja en cada libro, asi que lo que devuelve lo puede leer
+// cualquiera. Que el tipo PublicUser no tenga esos campos es lo que hace que la
+// fuga no se pueda reintroducir por descuido; esto fija el resto del contrato.
+func TestGetUser_DevuelveElPerfilPublico(t *testing.T) {
+	h := newHarness()
+	u := h.conUsuario(t, true)
+	bio := "Escribo de noche"
+	u.Bio = &bio
+
+	resp, err := h.svc.GetUser(context.Background(), &userv1.GetUserRequest{Id: testUserID})
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+
+	got := resp.GetUser()
+	if got.GetId() != testUserID || got.GetUsername() != testUsername || got.GetBio() != bio {
+		t.Fatalf("al perfil publico le falta lo que si es publico: %+v", got)
+	}
+
+	// Y el email no puede aparecer por ninguna via: ni siquiera serializado.
+	if strings.Contains(got.String(), testEmail) {
+		t.Fatalf("el email se filtro en el perfil publico: %s", got.String())
+	}
+}
+
+func TestGetAllUsers_NoFiltraEmails(t *testing.T) {
+	h := newHarness()
+	h.conUsuario(t, true)
+
+	resp, err := h.svc.GetAllUsers(context.Background(), &userv1.GetAllUsersRequest{})
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if len(resp.GetUsers()) != 1 {
+		t.Fatalf("usuarios = %d, se esperaba 1", len(resp.GetUsers()))
+	}
+	if strings.Contains(resp.String(), testEmail) {
+		t.Fatalf("el listado publico llevaba emails: %s", resp.String())
+	}
+}
+
+// La contraparte: el dueno si recibe su email, o no podria ver sus propios
+// datos en ningun sitio.
+func TestGetCurrentUser_SiLlevaElEmail(t *testing.T) {
+	h := newHarness()
+	h.conUsuario(t, true)
+	ctx := h.conSesion(context.Background(), testUserID)
+
+	resp, err := h.svc.GetCurrentUser(ctx, &userv1.GetCurrentUserRequest{})
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if resp.GetUser().GetEmail() != testEmail {
+		t.Fatalf("email = %q, se esperaba %q", resp.GetUser().GetEmail(), testEmail)
+	}
+}
+
 // --- UpdateUser -------------------------------------------------------------
 
 func TestUpdateUser_ValidaLaEntrada(t *testing.T) {
@@ -202,8 +261,45 @@ func TestUpdateUser_ValidaLaEntrada(t *testing.T) {
 		t.Run(tt.nombre, func(t *testing.T) {
 			h := newHarness()
 			h.conUsuario(t, true)
-			_, err := h.svc.UpdateUser(context.Background(), tt.req)
+			ctx := h.conSesion(context.Background(), testUserID)
+			_, err := h.svc.UpdateUser(ctx, tt.req)
 			requireCode(t, err, codes.InvalidArgument)
+		})
+	}
+}
+
+// Sin esto, bastaba con conocer un id ajeno —y los ids de autor son publicos,
+// van en cada libro— para reescribir el perfil de cualquiera.
+func TestUpdateUser_SoloElDueno(t *testing.T) {
+	const otroID = "22222222-2222-2222-2222-222222222222"
+	nuevo := "secuestrado"
+
+	tests := []struct {
+		nombre string
+		ctx    func(*harness) context.Context
+		quiere codes.Code
+	}{
+		{"sin token", func(*harness) context.Context {
+			return context.Background()
+		}, codes.Unauthenticated},
+		{"con el token de otro", func(h *harness) context.Context {
+			return h.conSesion(context.Background(), otroID)
+		}, codes.PermissionDenied},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.nombre, func(t *testing.T) {
+			h := newHarness()
+			h.conUsuario(t, true)
+
+			_, err := h.svc.UpdateUser(tt.ctx(h), &userv1.UpdateUserRequest{
+				Id: testUserID, Username: &nuevo,
+			})
+
+			requireCode(t, err, tt.quiere)
+			if u := h.repo.users[testUserID]; u.Username != testUsername {
+				t.Fatalf("el perfil se modifico igual: username = %q", u.Username)
+			}
 		})
 	}
 }
@@ -211,7 +307,7 @@ func TestUpdateUser_ValidaLaEntrada(t *testing.T) {
 func TestUpdateUser_InvalidaElCacheDelUsuario(t *testing.T) {
 	h := newHarness()
 	h.conUsuario(t, true)
-	ctx := context.Background()
+	ctx := h.conSesion(context.Background(), testUserID)
 
 	// Deja el usuario cacheado.
 	if _, err := h.svc.GetUser(ctx, &userv1.GetUserRequest{Id: testUserID}); err != nil {
@@ -240,8 +336,9 @@ func TestUpdateUser_InvalidaElCacheDelUsuario(t *testing.T) {
 func TestUpdateUser_NoExiste(t *testing.T) {
 	h := newHarness()
 	nuevo := "renombrado"
+	ctx := h.conSesion(context.Background(), testUserID)
 
-	_, err := h.svc.UpdateUser(context.Background(), &userv1.UpdateUserRequest{
+	_, err := h.svc.UpdateUser(ctx, &userv1.UpdateUserRequest{
 		Id: testUserID, Username: &nuevo,
 	})
 
@@ -258,20 +355,91 @@ func TestDeleteUser_IdVacio(t *testing.T) {
 
 func TestDeleteUser_NoExiste(t *testing.T) {
 	h := newHarness()
-	_, err := h.svc.DeleteUser(context.Background(), &userv1.DeleteUserRequest{Id: testUserID})
+	ctx := h.conSesion(context.Background(), testUserID)
+	_, err := h.svc.DeleteUser(ctx, &userv1.DeleteUserRequest{Id: testUserID})
 	requireCode(t, err, codes.NotFound)
 }
 
 func TestDeleteUser_InvalidaElCache(t *testing.T) {
 	h := newHarness()
 	h.conUsuario(t, true)
+	ctx := h.conSesion(context.Background(), testUserID)
 
-	if _, err := h.svc.DeleteUser(context.Background(), &userv1.DeleteUserRequest{Id: testUserID}); err != nil {
+	if _, err := h.svc.DeleteUser(ctx, &userv1.DeleteUserRequest{Id: testUserID}); err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
 
 	if len(h.userCache.invalidatedUsers) != 1 {
 		t.Fatalf("invalidaciones = %d, se esperaba 1", len(h.userCache.invalidatedUsers))
+	}
+}
+
+// Borrar la cuenta es lo mas destructivo de la API y con la cascada se lleva
+// toda la obra del autor: no puede depender de conocer un id publico.
+func TestDeleteUser_SoloElDueno(t *testing.T) {
+	const otroID = "22222222-2222-2222-2222-222222222222"
+
+	tests := []struct {
+		nombre string
+		ctx    func(*harness) context.Context
+		quiere codes.Code
+	}{
+		{"sin token", func(*harness) context.Context {
+			return context.Background()
+		}, codes.Unauthenticated},
+		{"con el token de otro", func(h *harness) context.Context {
+			return h.conSesion(context.Background(), otroID)
+		}, codes.PermissionDenied},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.nombre, func(t *testing.T) {
+			h := newHarness()
+			h.conUsuario(t, true)
+
+			_, err := h.svc.DeleteUser(tt.ctx(h), &userv1.DeleteUserRequest{Id: testUserID})
+
+			requireCode(t, err, tt.quiere)
+			if _, sigue := h.repo.users[testUserID]; !sigue {
+				t.Fatal("la cuenta se borro igual")
+			}
+			if len(h.content.deleted) != 0 {
+				t.Fatal("se pidio borrar el contenido de una cuenta ajena")
+			}
+		})
+	}
+}
+
+func TestDeleteUser_ArrastraElContenidoDelAutor(t *testing.T) {
+	h := newHarness()
+	h.conUsuario(t, true)
+	ctx := h.conSesion(context.Background(), testUserID)
+
+	if _, err := h.svc.DeleteUser(ctx, &userv1.DeleteUserRequest{Id: testUserID}); err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+
+	// Los libros y sagas viven en otra base, asi que no hay CASCADE que los
+	// alcance: hay que habersele pedido a library-service.
+	if len(h.content.deleted) != 1 || h.content.deleted[0] != testUserID {
+		t.Fatalf("contenido borrado = %v, se esperaba [%s]", h.content.deleted, testUserID)
+	}
+}
+
+// El contenido va primero justamente para esto: si library-service no responde,
+// la cuenta sigue en pie y el cliente puede reintentar. Al reves quedaria obra
+// sin dueno y sin forma de llegar a ella.
+func TestDeleteUser_SiFallaElContenidoNoBorraLaCuenta(t *testing.T) {
+	h := newHarness()
+	h.conUsuario(t, true)
+	h.content.err = errors.New("library-service caido")
+	ctx := h.conSesion(context.Background(), testUserID)
+
+	_, err := h.svc.DeleteUser(ctx, &userv1.DeleteUserRequest{Id: testUserID})
+
+	requireCode(t, err, codes.Internal)
+	if _, sigue := h.repo.users[testUserID]; !sigue {
+		t.Fatal("se borro la cuenta pese a que su contenido no se pudo borrar")
 	}
 }
 

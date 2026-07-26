@@ -5,15 +5,16 @@ PROTO_PATHS := --proto_path=proto --proto_path=proto/third_party
 
 .PHONY: proto tidy build run test test-integration migrate-up migrate-down
 
-# Genera los .pb.go del contrato. El descriptor que consume el gateway NO se
-# genera aquí: es uno solo con todos los servicios y lo arma el Makefile de la
-# raíz (`make proto-descriptor`).
+# Genera los .pb.go del contrato propio y del stub de cliente de
+# library-service. El descriptor que consume el gateway NO se genera aquí: es
+# uno solo con todos los servicios y lo arma el Makefile de la raíz
+# (`make proto-descriptor`).
 proto:
 	protoc \
 		$(PROTO_PATHS) \
 		--go_out=proto --go_opt=paths=source_relative \
 		--go-grpc_out=proto --go-grpc_opt=paths=source_relative \
-		proto/user/v1/user.proto
+		proto/user/v1/user.proto proto/library/v1/library_content.proto
 
 tidy:
 	go mod tidy

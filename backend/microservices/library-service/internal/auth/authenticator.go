@@ -17,7 +17,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	userv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/proto/user/v1"
+	userv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/user/v1"
 )
 
 type Authenticator struct {

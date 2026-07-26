@@ -6,9 +6,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/cache"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/domain"
-	libraryv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/cache"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
+	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
 )
 
 // cachedBookDetail es lo que se guarda en Valkey para GetBook: el libro con la
@@ -25,8 +25,8 @@ type cachedBookList struct {
 	Total int32          `json:"total"`
 }
 
-// CreateBook crea el libro junto a su primer capitulo, en una transaccion: la
-// regla es que un libro nunca exista sin al menos un capitulo.
+// CreateBook crea el libro vacio. Los capitulos, incluido el primero, se
+// agregan despues con CreateChapter: son un recurso propio y se editan aparte.
 func (s *LibraryService) CreateBook(ctx context.Context, req *libraryv1.CreateBookRequest) (*libraryv1.BookResponse, error) {
 	authorID, err := s.auth.Require(ctx)
 	if err != nil {
@@ -52,43 +52,22 @@ func (s *LibraryService) CreateBook(ctx context.Context, req *libraryv1.CreateBo
 			return nil, err
 		}
 	}
-
-	// El primer capitulo es opcional en la peticion pero no en la base: si no
-	// viene, se crea igual con un titulo por defecto y sin contenido.
-	chapterTitle := defaultFirstChapterTitle
-	chapterContent := ""
-	if fc := req.GetFirstChapter(); fc != nil {
-		if fc.GetTitle() != "" {
-			if chapterTitle, err = requiredText("first_chapter.title", fc.GetTitle(), titleMaxLen); err != nil {
-				return nil, err
-			}
-		}
-		chapterContent = fc.GetContent()
-	}
-	content, err := optionalText("first_chapter.content", chapterContent, contentMaxLen)
-	if err != nil {
-		return nil, err
+	// Un libro recien creado no tiene capitulos, asi que no puede nacer
+	// publicado sin romper la invariante. Se rechaza en vez de degradarlo a
+	// borrador en silencio: el autor pidio publicar y tiene que enterarse de
+	// que falta el contenido.
+	if bookStatus == domain.BookStatusPublished {
+		return nil, status.Error(codes.FailedPrecondition,
+			"a new book has no chapters yet and cannot be published")
 	}
 
-	book := &domain.Book{
+	created, err := s.books.Create(ctx, &domain.Book{
 		AuthorID:    authorID,
 		Title:       title,
 		Description: description,
 		CoverURL:    coverURL,
 		Status:      bookStatus,
-	}
-	// El capitulo inicial nace en el mismo estado que el libro para que
-	// publicar un libro de una sentada no deje su unico capitulo en borrador.
-	firstChapter := &domain.Chapter{
-		Title:   chapterTitle,
-		Content: content,
-		Status:  domain.ChapterStatusDraft,
-	}
-	if bookStatus == domain.BookStatusPublished {
-		firstChapter.Status = domain.ChapterStatusPublished
-	}
-
-	created, _, err := s.books.CreateWithFirstChapter(ctx, book, firstChapter)
+	})
 	if err != nil {
 		return nil, mapRepoErr(err, "failed to create book")
 	}
@@ -110,6 +89,11 @@ func (s *LibraryService) ListBooks(ctx context.Context, req *libraryv1.ListBooks
 		return nil, err
 	}
 
+	// Sin ViewerID a proposito: este listado es la vista publica, y su
+	// chapter_count es el numero publico (solo capitulos publicados) para
+	// todos, tambien para el autor. La vista del autor sobre lo suyo es
+	// ListMyBooks, que si cuenta sus borradores. Ademas evita resolver el token
+	// contra user-service en un endpoint que hoy no lo necesita.
 	filter := normalizePagination(domain.BookFilter{
 		Page:     req.GetPage(),
 		PageSize: req.GetPageSize(),
@@ -142,11 +126,14 @@ func (s *LibraryService) ListMyBooks(ctx context.Context, req *libraryv1.ListMyB
 		return nil, err
 	}
 
+	// Aqui todos los libros son del llamante, asi que el conteo incluye sus
+	// capitulos en borrador: es su propio escritorio.
 	filter := normalizePagination(domain.BookFilter{
 		Page:     req.GetPage(),
 		PageSize: req.GetPageSize(),
 		AuthorID: authorID,
 		Search:   req.GetSearch(),
+		ViewerID: authorID,
 	})
 
 	// Sobre lo propio status es un filtro libre; vacio trae los tres estados.
@@ -282,6 +269,19 @@ func (s *LibraryService) UpdateBook(ctx context.Context, req *libraryv1.UpdateBo
 		st, err := validateBookStatus(*req.Status)
 		if err != nil {
 			return nil, err
+		}
+		// Publicar es el momento en que el libro queda a la vista del lector:
+		// aqui es donde se exige que ya no este vacio. Un libro sin capitulos
+		// se queda en borrador, no hay forma de sacarlo de ahi.
+		if st == domain.BookStatusPublished {
+			chapters, err := s.chapterCount(ctx, id)
+			if err != nil {
+				return nil, err
+			}
+			if chapters == 0 {
+				return nil, status.Error(codes.FailedPrecondition,
+					"an empty book cannot be published")
+			}
 		}
 		bookStatus = &st
 	}

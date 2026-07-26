@@ -128,7 +128,7 @@ const file_user_v1_user_auth_proto_rawDesc = "" +
 	"\x17ValidateSessionResponse\x12\x17\n" +
 	"\auser_id\x18\x01 \x01(\tR\x06userId2c\n" +
 	"\vUserService\x12T\n" +
-	"\x0fValidateSession\x12\x1f.user.v1.ValidateSessionRequest\x1a .user.v1.ValidateSessionResponseBfZdgithub.com/estebandeveloper20/lectonautas/backend/microservices/library-service/proto/user/v1;userv1b\x06proto3"
+	"\x0fValidateSession\x12\x1f.user.v1.ValidateSessionRequest\x1a .user.v1.ValidateSessionResponseB_Z]github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/user/v1;userv1b\x06proto3"
 
 var (
 	file_user_v1_user_auth_proto_rawDescOnce sync.Once

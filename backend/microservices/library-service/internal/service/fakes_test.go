@@ -8,9 +8,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/cache"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/domain"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/repository"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/cache"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/repository"
 )
 
 // Dobles en memoria de las dependencias del servicio. Solo implementan lo que
@@ -27,6 +27,9 @@ const (
 	sagaID      = "66666666-6666-6666-6666-666666666666"
 	missingID   = "99999999-9999-9999-9999-999999999999"
 	invalidUUID = "no-soy-un-uuid"
+	// El id que le toca a un libro recien creado, distinto de bookID para que
+	// CreateBook no pise el libro del escenario.
+	newBookID = "88888888-8888-8888-8888-888888888888"
 )
 
 // --- Authenticator ----------------------------------------------------------
@@ -78,26 +81,54 @@ func (c *noopCache) Bump(context.Context) error             { c.bumps++; return 
 
 type fakeBookRepo struct {
 	books map[string]*domain.Book
+	// chapters lo enlaza newTestService para poder calcular ChapterCount igual
+	// que lo hace la subconsulta real.
+	chapters *fakeChapterRepo
 }
 
-func (r *fakeBookRepo) CreateWithFirstChapter(_ context.Context, b *domain.Book, ch *domain.Chapter) (*domain.Book, *domain.Chapter, error) {
-	b.ID = bookID
+// countChapters replica chapterCountExpr: el autor cuenta todos sus capitulos,
+// cualquier otro solo los publicados.
+func (r *fakeBookRepo) countChapters(bookID, viewerID string) int32 {
+	if r.chapters == nil {
+		return 0
+	}
+	book := r.books[bookID]
+	isAuthor := book != nil && viewerID != "" && book.AuthorID == viewerID
+
+	n := int32(0)
+	for _, ch := range r.chapters.chapters {
+		if ch.BookID != bookID {
+			continue
+		}
+		if isAuthor || ch.Status == domain.ChapterStatusPublished {
+			n++
+		}
+	}
+	return n
+}
+
+// withCount devuelve una copia con el conteo ya resuelto: el repositorio real
+// tampoco guarda ese numero en la fila, lo calcula en cada consulta.
+func (r *fakeBookRepo) withCount(b *domain.Book, viewerID string) *domain.Book {
+	out := *b
+	out.ChapterCount = r.countChapters(b.ID, viewerID)
+	return &out
+}
+
+func (r *fakeBookRepo) Create(_ context.Context, b *domain.Book) (*domain.Book, error) {
+	b.ID = newBookID
 	b.CreatedAt = time.Now()
 	b.UpdatedAt = b.CreatedAt
 	r.books[b.ID] = b
-
-	ch.ID = chapterID
-	ch.BookID = b.ID
-	ch.Position = 1
-	return b, ch, nil
+	return b, nil
 }
 
-func (r *fakeBookRepo) GetByID(_ context.Context, id string) (*domain.Book, error) {
+func (r *fakeBookRepo) GetByID(_ context.Context, id, viewerID string) (*domain.Book, error) {
 	b, ok := r.books[id]
 	if !ok {
 		return nil, repository.ErrBookNotFound
 	}
-	return b, nil
+	return r.withCount(b, viewerID), nil
 }
 
 func (r *fakeBookRepo) List(_ context.Context, f domain.BookFilter) ([]*domain.Book, int32, error) {
@@ -109,7 +140,7 @@ func (r *fakeBookRepo) List(_ context.Context, f domain.BookFilter) ([]*domain.B
 		if f.Status != "" && b.Status != f.Status {
 			continue
 		}
-		out = append(out, b)
+		out = append(out, r.withCount(b, f.ViewerID))
 	}
 	return out, int32(len(out)), nil
 }
@@ -125,7 +156,8 @@ func (r *fakeBookRepo) Update(_ context.Context, upd *domain.BookUpdate) (*domai
 	if upd.Status != nil {
 		b.Status = *upd.Status
 	}
-	return b, nil
+	// Al Update solo llega el autor, que cuenta todos sus capitulos.
+	return r.withCount(b, b.AuthorID), nil
 }
 
 func (r *fakeBookRepo) Delete(_ context.Context, id string) error {
@@ -134,6 +166,20 @@ func (r *fakeBookRepo) Delete(_ context.Context, id string) error {
 	}
 	delete(r.books, id)
 	return nil
+}
+
+// DeleteByAuthor imita el borrado en cascada de la baja de cuenta. El conteo de
+// sagas y guardados no lo modela: lo que importa aqui es que los libros del
+// autor desaparezcan y los ajenos no.
+func (r *fakeBookRepo) DeleteByAuthor(_ context.Context, authorID string) (int32, int32, int32, error) {
+	borrados := int32(0)
+	for id, b := range r.books {
+		if b.AuthorID == authorID {
+			delete(r.books, id)
+			borrados++
+		}
+	}
+	return borrados, 0, 0, nil
 }
 
 type fakeChapterRepo struct {
@@ -175,6 +221,14 @@ func (r *fakeChapterRepo) Update(_ context.Context, upd *domain.ChapterUpdate) (
 	}
 	if upd.Title != nil {
 		ch.Title = *upd.Title
+	}
+	if upd.Content != nil {
+		ch.Content = upd.Content
+	}
+	// El status se aplica de verdad: de el depende la regla del ultimo
+	// capitulo publicado.
+	if upd.Status != nil {
+		ch.Status = *upd.Status
 	}
 	return ch, nil
 }
@@ -262,7 +316,7 @@ func (r *fakeSagaRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func (r *fakeSagaRepo) ListBooks(context.Context, string) ([]*domain.Book, error) {
+func (r *fakeSagaRepo) ListBooks(context.Context, string, string) ([]*domain.Book, error) {
 	return []*domain.Book{}, nil
 }
 func (r *fakeSagaRepo) AddBook(context.Context, string, string, int32) error { return nil }
@@ -310,6 +364,9 @@ func newTestService(a Authenticator) (*LibraryService, *noopCache) {
 		chapterID:  {ID: chapterID, BookID: bookID, Title: "Uno", Position: 1, Status: domain.ChapterStatusPublished},
 		chapter2ID: {ID: chapter2ID, BookID: bookID, Title: "Dos", Position: 2, Status: domain.ChapterStatusDraft},
 	}}
+	// El conteo de capitulos lo resuelve la consulta de libros, asi que el
+	// doble necesita ver los capitulos para calcularlo.
+	books.chapters = chapters
 	sagas := &fakeSagaRepo{sagas: map[string]*domain.Saga{
 		sagaID: {ID: sagaID, AuthorID: authorID, Title: "Saga"},
 	}}

@@ -7,7 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/domain"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
 )
 
 const chapterColumns = `id::text, book_id::text, title, content, position, status, created_at, updated_at`
@@ -20,6 +20,8 @@ type ChapterRepository interface {
 	ListByBook(ctx context.Context, bookID string, publishedOnly bool) ([]*domain.Chapter, error)
 	Update(ctx context.Context, upd *domain.ChapterUpdate) (*domain.Chapter, error)
 	Delete(ctx context.Context, bookID, id string) error
+	// CountByBook cuenta los capitulos del libro, en cualquier estado. Es lo
+	// que sostiene la regla de que un libro publicado no este vacio.
 	CountByBook(ctx context.Context, bookID string) (int, error)
 	// Reorder reasigna position 1..N segun el orden de chapterIDs, que debe
 	// contener exactamente los capitulos del libro.

@@ -86,6 +86,11 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${USER_SERVICE_DB}?sslmode=disable
       # Valkey, compartido con el ratelimit-service, para el cache de sesiones
       REDIS_ADDR: valkey:6379
+      # Al dar de baja una cuenta hay que borrar su contenido, que vive en la
+      # base de library-service. No va en depends_on a propósito: la conexión
+      # gRPC es perezosa y library-service ya depende de éste, así que ponerlo
+      # aquí cerraría el ciclo y el compose no arrancaría.
+      LIBRARY_SERVICE_ADDR: library-service:${LIBRARY_SERVICE_GRPC_PORT}
     depends_on:
       postgres:
         condition: service_healthy

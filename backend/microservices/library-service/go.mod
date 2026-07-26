@@ -1,4 +1,4 @@
-module github.com/estebandeveloper20/lectonautas/backend/microservices/library-service
+module github.com/EstebanTech/lectonautas/backend/microservices/library-service
 
 go 1.24
 

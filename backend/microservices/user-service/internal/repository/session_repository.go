@@ -7,7 +7,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/domain"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/domain"
 )
 
 var ErrSessionNotFound = errors.New("session not found")

@@ -8,7 +8,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/domain"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/domain"
 )
 
 const (

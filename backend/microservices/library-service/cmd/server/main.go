@@ -9,13 +9,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/auth"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/cache"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/config"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/database"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/repository"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/server"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/service"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/auth"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/cache"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/config"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/database"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/repository"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/server"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/service"
 )
 
 func main() {

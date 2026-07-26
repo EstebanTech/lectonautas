@@ -4,9 +4,12 @@ import (
 	"context"
 	"time"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/cache"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/domain"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/repository"
+	"google.golang.org/grpc/metadata"
+
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/cache"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/domain"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/repository"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/token"
 )
 
 // Dobles en memoria de las dependencias del servicio. Ademas de responder,
@@ -234,6 +237,23 @@ func (c *fakeUserCache) InvalidateAllUsers(context.Context) error {
 	return nil
 }
 
+// --- library-service --------------------------------------------------------
+
+// fakeContentDeleter registra a quien se le borro el contenido, para poder
+// afirmar que la baja de cuenta se lo pide a library-service y en que orden.
+type fakeContentDeleter struct {
+	deleted []string
+	err     error
+}
+
+func (d *fakeContentDeleter) DeleteAuthorContent(_ context.Context, userID string) error {
+	if d.err != nil {
+		return d.err
+	}
+	d.deleted = append(d.deleted, userID)
+	return nil
+}
+
 // --- Armado -----------------------------------------------------------------
 
 // harness junta el servicio con sus dobles para que las pruebas puedan
@@ -244,6 +264,7 @@ type harness struct {
 	sessions     *fakeSessionRepo
 	sessionCache *fakeSessionCache
 	userCache    *fakeUserCache
+	content      *fakeContentDeleter
 }
 
 func newHarness() *harness {
@@ -251,14 +272,24 @@ func newHarness() *harness {
 	sessions := &fakeSessionRepo{}
 	sessionCache := newFakeSessionCache()
 	userCache := newFakeUserCache()
+	content := &fakeContentDeleter{}
 
 	return &harness{
-		svc:          NewUserService(repo, sessions, sessionCache, userCache),
+		svc:          NewUserService(repo, sessions, sessionCache, userCache, content),
 		repo:         repo,
 		sessions:     sessions,
 		sessionCache: sessionCache,
 		userCache:    userCache,
+		content:      content,
 	}
+}
+
+// conSesion deja una sesion valida para el usuario y devuelve un contexto con
+// el header Authorization puesto, como lo reenvia el gateway.
+func (h *harness) conSesion(ctx context.Context, userID string) context.Context {
+	const raw = "token-de-prueba"
+	h.sessionCache.entries[token.Hash(raw)] = userID
+	return metadata.NewIncomingContext(ctx, metadata.Pairs("authorization", "Bearer "+raw))
 }
 
 // conUsuario deja un usuario ya existente, con la password hasheada como lo

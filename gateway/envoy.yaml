@@ -79,6 +79,15 @@ static_resources:
                             status: 404
                             body:
                               inline_string: "not found"
+                        # Borra todos los libros y sagas de un usuario. Solo la
+                        # llama user-service al dar de baja una cuenta; desde
+                        # fuera sería un borrado masivo sin más credencial que
+                        # un user_id, que es público.
+                        - match: { path: "/library.v1.LibraryService/DeleteAuthorContent" }
+                          direct_response:
+                            status: 404
+                            body:
+                              inline_string: "not found"
                         # El transcoder sí invalida el caché de ruta tras reescribir
                         # el path, así que el router vuelve a resolver — esta vez
                         # contra el path gRPC ya transcodificado.

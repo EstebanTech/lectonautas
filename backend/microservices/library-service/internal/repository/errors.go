@@ -19,8 +19,6 @@ var (
 	ErrAlreadySaved = errors.New("book already saved with this kind")
 	// Dos capitulos no pueden compartir position dentro de un libro.
 	ErrPositionTaken = errors.New("position already taken")
-	// Un libro siempre conserva al menos un capitulo.
-	ErrLastChapter = errors.New("cannot delete the last chapter of a book")
 	// El conjunto enviado a un reorder no coincide con el real.
 	ErrReorderMismatch = errors.New("reorder list does not match the current items")
 )

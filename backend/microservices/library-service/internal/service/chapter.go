@@ -6,9 +6,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/domain"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/repository"
-	libraryv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
+	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
 )
 
 func (s *LibraryService) CreateChapter(ctx context.Context, req *libraryv1.CreateChapterRequest) (*libraryv1.ChapterResponse, error) {
@@ -138,6 +137,9 @@ func (s *LibraryService) UpdateChapter(ctx context.Context, req *libraryv1.Updat
 		if err != nil {
 			return nil, err
 		}
+		// Despublicar un capitulo no vacia el libro: la fila sigue ahi. Es
+		// decision del autor tener un libro publicado cuyos capitulos aun no
+		// lo estan, asi que aqui no hay nada que impedir.
 		chapterStatus = &st
 	}
 
@@ -157,8 +159,9 @@ func (s *LibraryService) UpdateChapter(ctx context.Context, req *libraryv1.Updat
 	return &libraryv1.ChapterResponse{Chapter: chapterToProto(updated)}, nil
 }
 
-// DeleteChapter se niega a dejar el libro sin capitulos: para vaciarlo del todo
-// hay que borrar el libro, que es otra operacion.
+// DeleteChapter vacia el libro sin problema mientras sea un borrador. Lo que no
+// permite es dejar sin nada que leer a un libro ya publicado: para eso hay que
+// pasarlo antes a borrador (o archivarlo), que es una decision consciente.
 func (s *LibraryService) DeleteChapter(ctx context.Context, req *libraryv1.DeleteChapterRequest) (*libraryv1.DeleteResponse, error) {
 	bookID, err := requiredID("book_id", req.GetBookId())
 	if err != nil {
@@ -173,22 +176,29 @@ func (s *LibraryService) DeleteChapter(ctx context.Context, req *libraryv1.Delet
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.ownedBook(ctx, bookID, callerID); err != nil {
+	book, err := s.ownedBook(ctx, bookID, callerID)
+	if err != nil {
 		return nil, err
 	}
 
 	// El capitulo tiene que existir antes de contar: si no, un id inventado
-	// sobre un libro de un solo capitulo daria "es el ultimo" en vez de 404.
+	// sobre un libro con un solo capitulo daria "es el ultimo" en vez de 404.
 	if _, err := s.chapters.GetByID(ctx, bookID, id); err != nil {
 		return nil, mapRepoErr(err, "failed to load chapter")
 	}
 
-	count, err := s.chapters.CountByBook(ctx, bookID)
-	if err != nil {
-		return nil, mapRepoErr(err, "failed to count chapters")
-	}
-	if count <= 1 {
-		return nil, mapRepoErr(repository.ErrLastChapter, "failed to delete chapter")
+	// Un libro que no esta publicado se puede vaciar del todo; el publicado no,
+	// porque quedaria a la vista sin nada dentro y sin forma de volver atras
+	// mas que despublicandolo.
+	if book.Status == domain.BookStatusPublished {
+		chapters, err := s.chapterCount(ctx, bookID)
+		if err != nil {
+			return nil, err
+		}
+		if chapters <= 1 {
+			return nil, status.Error(codes.FailedPrecondition,
+				"cannot delete the last chapter of a published book")
+		}
 	}
 
 	if err := s.chapters.Delete(ctx, bookID, id); err != nil {

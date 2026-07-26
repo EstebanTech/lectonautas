@@ -6,8 +6,8 @@ import (
 
 	"google.golang.org/grpc/codes"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/repository"
-	userv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/proto/user/v1"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/repository"
+	userv1 "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/user/v1"
 )
 
 // Pruebas del logout. Antes armaban el servicio con un cliente de Valkey

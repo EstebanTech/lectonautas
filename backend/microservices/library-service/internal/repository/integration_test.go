@@ -8,7 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/domain"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
 )
 
 // Pruebas contra una base real. Cubren lo que los dobles en memoria no pueden:
@@ -65,74 +65,82 @@ func newAuthor(t *testing.T, pool *pgxpool.Pool) string {
 	return id
 }
 
+// newBook crea el libro y le agrega un primer capitulo por el camino normal
+// (dos operaciones, como las hace un cliente): el libro ya no nace con
+// contenido, pero casi todas las pruebas de abajo necesitan tenerlo.
+//
+// El capitulo sigue el estado del libro para no dejar datos que contradigan la
+// invariante del servicio: un libro publicado tiene al menos uno publicado.
 func newBook(t *testing.T, repo *PostgresBookRepository, authorID, title, bookStatus string) *domain.Book {
 	t.Helper()
 
-	book, _, err := repo.CreateWithFirstChapter(context.Background(),
-		&domain.Book{AuthorID: authorID, Title: title, Status: bookStatus},
-		&domain.Chapter{Title: "Capitulo 1", Status: domain.ChapterStatusDraft},
-	)
+	ctx := context.Background()
+	book, err := repo.Create(ctx, &domain.Book{AuthorID: authorID, Title: title, Status: bookStatus})
 	if err != nil {
 		t.Fatalf("no se pudo crear el libro: %v", err)
+	}
+
+	chapterStatus := domain.ChapterStatusDraft
+	if bookStatus == domain.BookStatusPublished {
+		chapterStatus = domain.ChapterStatusPublished
+	}
+	chapters := NewPostgresChapterRepository(repo.pool)
+	if _, err := chapters.Create(ctx, &domain.Chapter{
+		BookID: book.ID, Title: "Capitulo 1", Status: chapterStatus,
+	}); err != nil {
+		t.Fatalf("no se pudo crear el capitulo inicial: %v", err)
 	}
 	return book
 }
 
-func TestCreateWithFirstChapter_EsTransaccional(t *testing.T) {
+func TestCreateBook_NaceVacio(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
 	books := NewPostgresBookRepository(pool)
 	chapters := NewPostgresChapterRepository(pool)
 	author := newAuthor(t, pool)
 
-	book, chapter, err := books.CreateWithFirstChapter(ctx,
-		&domain.Book{AuthorID: author, Title: "Con capitulo", Status: domain.BookStatusDraft},
-		&domain.Chapter{Title: "El embarque", Status: domain.ChapterStatusDraft},
-	)
+	book, err := books.Create(ctx, &domain.Book{
+		AuthorID: author, Title: "Sin capitulos", Status: domain.BookStatusDraft,
+	})
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
 
-	if chapter.Position != 1 {
-		t.Fatalf("position del primer capitulo = %d, se esperaba 1", chapter.Position)
-	}
-
+	// Que el esquema acepte un libro sin capitulos es la premisa del diseno:
+	// si hubiera una restriccion que lo impidiera, esto fallaria aqui.
 	got, err := chapters.ListByBook(ctx, book.ID, false)
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("capitulos = %d, se esperaba 1", len(got))
+	if len(got) != 0 {
+		t.Fatalf("capitulos = %d, se esperaba ninguno", len(got))
 	}
 }
 
-func TestCreateWithFirstChapter_RevierteSiFallaElCapitulo(t *testing.T) {
+func TestCreateChapter_ElPrimeroTomaLaPosicionUno(t *testing.T) {
 	pool := testPool(t)
 	ctx := context.Background()
 	books := NewPostgresBookRepository(pool)
+	chapters := NewPostgresChapterRepository(pool)
 	author := newAuthor(t, pool)
 
-	// El titulo del capitulo es NOT NULL y VARCHAR(255): uno mas largo hace
-	// fallar el segundo INSERT, y el libro no debe sobrevivir.
-	tituloImposible := make([]byte, 300)
-	for i := range tituloImposible {
-		tituloImposible[i] = 'x'
-	}
-
-	_, _, err := books.CreateWithFirstChapter(ctx,
-		&domain.Book{AuthorID: author, Title: "No deberia quedar", Status: domain.BookStatusDraft},
-		&domain.Chapter{Title: string(tituloImposible), Status: domain.ChapterStatusDraft},
-	)
-	if err == nil {
-		t.Fatal("se esperaba que fallara la insercion del capitulo")
-	}
-
-	var n int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM content.books WHERE author_id = $1`, author).Scan(&n); err != nil {
+	book, err := books.Create(ctx, &domain.Book{
+		AuthorID: author, Title: "Recien creado", Status: domain.BookStatusDraft,
+	})
+	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
-	if n != 0 {
-		t.Fatalf("quedaron %d libros sin capitulos: la transaccion no revirtio", n)
+
+	// Sobre un libro vacio, el COALESCE(max(position), 0) + 1 tiene que dar 1.
+	ch, err := chapters.Create(ctx, &domain.Chapter{
+		BookID: book.ID, Title: "El embarque", Position: 0, Status: domain.ChapterStatusDraft,
+	})
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if ch.Position != 1 {
+		t.Fatalf("position del primer capitulo = %d, se esperaba 1", ch.Position)
 	}
 }
 
@@ -285,7 +293,7 @@ func TestGetByID_UUIDMalformadoEsNotFound(t *testing.T) {
 	// Postgres responde 22P02 (invalid_text_representation) y el repositorio
 	// lo traduce: para una busqueda puntual, malformado y inexistente son lo
 	// mismo.
-	_, err := books.GetByID(context.Background(), "no-soy-un-uuid")
+	_, err := books.GetByID(context.Background(), "no-soy-un-uuid", "")
 
 	if !errors.Is(err, ErrBookNotFound) {
 		t.Fatalf("error = %v, se esperaba ErrBookNotFound", err)
@@ -405,7 +413,7 @@ func TestSagaBooks_VinculaOrdenaYDesvincula(t *testing.T) {
 	if err := sagas.ReorderBooks(ctx, saga.ID, []string{dos.ID, uno.ID}); err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
-	ordenados, err := sagas.ListBooks(ctx, saga.ID)
+	ordenados, err := sagas.ListBooks(ctx, saga.ID, author)
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
@@ -416,7 +424,7 @@ func TestSagaBooks_VinculaOrdenaYDesvincula(t *testing.T) {
 	if err := sagas.RemoveBook(ctx, saga.ID, dos.ID); err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
-	quedan, _ := sagas.ListBooks(ctx, saga.ID)
+	quedan, _ := sagas.ListBooks(ctx, saga.ID, author)
 	if len(quedan) != 1 {
 		t.Fatalf("quedan %d libros en la saga, se esperaba 1", len(quedan))
 	}
@@ -438,7 +446,218 @@ func TestDeleteSaga_NoBorraLosLibros(t *testing.T) {
 	}
 
 	// Pertenecer a una saga es opcional: el libro sigue existiendo.
-	if _, err := books.GetByID(ctx, book.ID); err != nil {
+	if _, err := books.GetByID(ctx, book.ID, author); err != nil {
 		t.Fatalf("el libro no deberia haberse borrado con la saga: %v", err)
 	}
+}
+
+// La baja de cuenta se apoya en los CASCADE del esquema, que es justo lo que un
+// doble en memoria no puede demostrar.
+func TestDeleteByAuthor_ArrastraTodoLoDelUsuario(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	books := NewPostgresBookRepository(pool)
+	sagas := NewPostgresSagaRepository(pool)
+	saved := NewPostgresSavedBookRepository(pool)
+	autor := newAuthor(t, pool)
+	otro := newAuthor(t, pool)
+
+	// Del autor: dos libros (con sus capitulos), una saga con uno de ellos
+	// dentro, y un libro ajeno guardado en su biblioteca.
+	uno := newBook(t, books, autor, "Suyo uno", domain.BookStatusPublished)
+	dos := newBook(t, books, autor, "Suyo dos", domain.BookStatusDraft)
+	saga, err := sagas.Create(ctx, &domain.Saga{AuthorID: autor, Title: "Su saga"})
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if err := sagas.AddBook(ctx, saga.ID, uno.ID, 0); err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+
+	delOtro := newBook(t, books, otro, "Ajeno", domain.BookStatusPublished)
+	if _, err := saved.Save(ctx, autor, delOtro.ID, domain.SavedKindFavorite); err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	// Y un tercero que tenia guardado un libro del autor que se da de baja: esa
+	// fila tiene que irse tambien, por CASCADE del libro.
+	if _, err := saved.Save(ctx, otro, uno.ID, domain.SavedKindReadLater); err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+
+	nLibros, nSagas, nGuardados, err := books.DeleteByAuthor(ctx, autor)
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if nLibros != 2 || nSagas != 1 || nGuardados != 1 {
+		t.Fatalf("borrados = %d libros, %d sagas, %d guardados; se esperaba 2, 1, 1",
+			nLibros, nSagas, nGuardados)
+	}
+
+	// Nada suyo sobrevive, ni lo que colgaba de sus libros.
+	for _, q := range []struct {
+		nombre string
+		query  string
+		arg    any
+	}{
+		{"libros", `SELECT count(*) FROM content.books WHERE author_id = $1`, autor},
+		{"sagas", `SELECT count(*) FROM content.sagas WHERE author_id = $1`, autor},
+		{"su biblioteca", `SELECT count(*) FROM reader.saved_books WHERE user_id = $1`, autor},
+		{"capitulos de sus libros", `SELECT count(*) FROM content.chapters WHERE book_id = $1`, uno.ID},
+		{"vinculos de su saga", `SELECT count(*) FROM content.saga_books WHERE saga_id = $1`, saga.ID},
+		{"su libro guardado por terceros", `SELECT count(*) FROM reader.saved_books WHERE book_id = $1`, uno.ID},
+	} {
+		var n int
+		if err := pool.QueryRow(ctx, q.query, q.arg).Scan(&n); err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		if n != 0 {
+			t.Fatalf("quedaron %d %s", n, q.nombre)
+		}
+	}
+
+	// Y lo del otro autor sigue intacto.
+	if _, err := books.GetByID(ctx, delOtro.ID, otro); err != nil {
+		t.Fatalf("se borro el libro de otro autor: %v", err)
+	}
+	if _, err := books.GetByID(ctx, dos.ID, autor); err == nil {
+		t.Fatal("el segundo libro del autor deberia haberse borrado")
+	}
+}
+
+func TestDeleteByAuthor_EsIdempotente(t *testing.T) {
+	pool := testPool(t)
+	books := NewPostgresBookRepository(pool)
+	autor := newAuthor(t, pool)
+
+	// Sobre un usuario sin nada no falla: devuelve ceros. Es lo que permite que
+	// user-service reintente la baja si el borrado de la cuenta fallo despues.
+	nLibros, nSagas, nGuardados, err := books.DeleteByAuthor(context.Background(), autor)
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if nLibros != 0 || nSagas != 0 || nGuardados != 0 {
+		t.Fatalf("borrados = %d, %d, %d; se esperaban ceros", nLibros, nSagas, nGuardados)
+	}
+}
+
+// La subconsulta del conteo es lo unico de chapter_count que los dobles no
+// pueden probar: aqui se comprueba contra el SQL real, en las cuatro consultas
+// que devuelven libros.
+func TestChapterCount_CuentaSegunQuienPregunta(t *testing.T) {
+	pool := testPool(t)
+	ctx := context.Background()
+	books := NewPostgresBookRepository(pool)
+	chapters := NewPostgresChapterRepository(pool)
+	sagas := NewPostgresSagaRepository(pool)
+	saved := NewPostgresSavedBookRepository(pool)
+	author := newAuthor(t, pool)
+	otro := newAuthor(t, pool)
+
+	// newBook ya deja un capitulo publicado; se agrega uno en borrador.
+	book := newBook(t, books, author, "Con borrador", domain.BookStatusPublished)
+	if _, err := chapters.Create(ctx, &domain.Chapter{
+		BookID: book.ID, Title: "Inedito", Status: domain.ChapterStatusDraft,
+	}); err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+
+	t.Run("GetByID", func(t *testing.T) {
+		propio, err := books.GetByID(ctx, book.ID, author)
+		if err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		if propio.ChapterCount != 2 {
+			t.Fatalf("el autor deberia contar 2, conto %d", propio.ChapterCount)
+		}
+
+		ajeno, err := books.GetByID(ctx, book.ID, otro)
+		if err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		if ajeno.ChapterCount != 1 {
+			t.Fatalf("un lector ajeno deberia contar 1, conto %d", ajeno.ChapterCount)
+		}
+
+		// El anonimo llega con cadena vacia, que no es un uuid: el NULLIF de la
+		// consulta es lo que evita que Postgres reviente por el cast.
+		anonimo, err := books.GetByID(ctx, book.ID, "")
+		if err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		if anonimo.ChapterCount != 1 {
+			t.Fatalf("un anonimo deberia contar 1, conto %d", anonimo.ChapterCount)
+		}
+	})
+
+	t.Run("List", func(t *testing.T) {
+		propios, _, err := books.List(ctx, domain.BookFilter{
+			Page: 1, PageSize: 10, AuthorID: author, ViewerID: author,
+		})
+		if err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		if len(propios) != 1 || propios[0].ChapterCount != 2 {
+			t.Fatalf("en su listado el autor deberia contar 2")
+		}
+
+		publicos, _, err := books.List(ctx, domain.BookFilter{
+			Page: 1, PageSize: 10, AuthorID: author,
+		})
+		if err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		if len(publicos) != 1 || publicos[0].ChapterCount != 1 {
+			t.Fatalf("sin viewer el listado deberia contar 1")
+		}
+	})
+
+	t.Run("ListBooks de la saga", func(t *testing.T) {
+		saga, err := sagas.Create(ctx, &domain.Saga{AuthorID: author, Title: "Con conteo"})
+		if err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		if err := sagas.AddBook(ctx, saga.ID, book.ID, 0); err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+
+		propios, err := sagas.ListBooks(ctx, saga.ID, author)
+		if err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		if len(propios) != 1 || propios[0].ChapterCount != 2 {
+			t.Fatalf("el autor deberia contar 2 en su saga")
+		}
+
+		ajenos, err := sagas.ListBooks(ctx, saga.ID, otro)
+		if err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		if len(ajenos) != 1 || ajenos[0].ChapterCount != 1 {
+			t.Fatalf("un lector ajeno deberia contar 1 en esa saga")
+		}
+	})
+
+	t.Run("biblioteca del lector", func(t *testing.T) {
+		// El lector guarda un libro ajeno: cuenta solo lo publicado.
+		if _, err := saved.Save(ctx, otro, book.ID, domain.SavedKindFavorite); err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		lista, err := saved.ListByUser(ctx, otro, "")
+		if err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		if len(lista) != 1 || lista[0].Book.ChapterCount != 1 {
+			t.Fatalf("en la biblioteca de un ajeno el conteo deberia ser 1")
+		}
+
+		// El autor guarda el suyo: ahi si cuenta el borrador.
+		propio, err := saved.Save(ctx, author, book.ID, domain.SavedKindFavorite)
+		if err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		if propio.Book.ChapterCount != 2 {
+			t.Fatalf("al guardar su propio libro el autor deberia contar 2, conto %d",
+				propio.Book.ChapterCount)
+		}
+	})
 }

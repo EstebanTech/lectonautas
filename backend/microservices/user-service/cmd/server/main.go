@@ -9,12 +9,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/cache"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/config"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/database"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/repository"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/server"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/service"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/cache"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/config"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/content"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/database"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/repository"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/server"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/service"
 )
 
 func main() {
@@ -47,9 +48,17 @@ func main() {
 	sessionCache := cache.NewSessionCache(valkey)
 	userCache := cache.NewUserCache(valkey)
 
+	// La conexion es perezosa, asi que no importa que library-service todavia
+	// no este arriba: solo se usa al dar de baja una cuenta.
+	contentClient, err := content.New(cfg.LibraryAddr)
+	if err != nil {
+		log.Fatalf("failed to create library-service client (%s): %v", cfg.LibraryAddr, err)
+	}
+	defer contentClient.Close()
+
 	userRepo := repository.NewPostgresUserRepository(pool)
 	sessionRepo := repository.NewPostgresSessionRepository(pool)
-	userService := service.NewUserService(userRepo, sessionRepo, sessionCache, userCache)
+	userService := service.NewUserService(userRepo, sessionRepo, sessionCache, userCache, contentClient)
 	grpcServer := server.NewGRPCServer(userService)
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)

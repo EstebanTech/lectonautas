@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package library.v1;
 
-option go_package = "github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/proto/library/v1;libraryv1";
+option go_package = "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1;libraryv1";
 
 import "google/api/annotations.proto";
 import "google/protobuf/timestamp.proto";
@@ -16,8 +16,13 @@ import "google/protobuf/timestamp.proto";
 service LibraryService {
   // --- content: libros ----------------------------------------------------
 
-  // Crea el libro junto a su primer capitulo, en una sola transaccion: nunca
-  // queda un libro sin capitulos.
+  // Crea el libro vacio, sin capitulos. Los capitulos son un recurso aparte y
+  // se agregan siempre por CreateChapter, incluido el primero: el libro y su
+  // contenido se editan por separado.
+  //
+  // Por eso no se puede nacer publicado — un libro vacio se queda en borrador
+  // hasta que tenga al menos un capitulo. Se publica con UpdateBook cuando ya
+  // hay contenido. Borrarlo, en cambio, se puede siempre.
   rpc CreateBook(CreateBookRequest) returns (BookResponse) {
     option (google.api.http) = {
       post: "/v1/books"
@@ -48,6 +53,8 @@ service LibraryService {
       get: "/v1/books/{id}"
     };
   }
+  // Publicar (status: published) exige que el libro ya no este vacio. Que sus
+  // capitulos esten publicados o no es decision del autor.
   rpc UpdateBook(UpdateBookRequest) returns (BookResponse) {
     option (google.api.http) = {
       patch: "/v1/books/{id}"
@@ -63,6 +70,8 @@ service LibraryService {
 
   // --- content: capitulos -------------------------------------------------
 
+  // Agrega un capitulo al libro. Es la unica forma de crear contenido, tanto
+  // el primer capitulo como los siguientes.
   rpc CreateChapter(CreateChapterRequest) returns (ChapterResponse) {
     option (google.api.http) = {
       post: "/v1/books/{book_id}/chapters"
@@ -80,8 +89,8 @@ service LibraryService {
       body: "*"
     };
   }
-  // Falla si es el ultimo capitulo del libro: un libro siempre conserva al
-  // menos uno. Para vaciarlo del todo hay que borrar el libro.
+  // Un libro en borrador se puede vaciar del todo. Lo que falla es dejar vacio
+  // un libro publicado: primero hay que despublicarlo.
   rpc DeleteChapter(DeleteChapterRequest) returns (DeleteResponse) {
     option (google.api.http) = {
       delete: "/v1/books/{book_id}/chapters/{id}"
@@ -173,6 +182,21 @@ service LibraryService {
       delete: "/v1/library/{book_id}"
     };
   }
+
+  // --- interno: baja de cuenta -------------------------------------------
+
+  // DeleteAuthorContent borra todo lo que cuelga de un usuario: sus libros
+  // (con sus capitulos), sus sagas y su biblioteca de lector. Lo llama
+  // user-service cuando alguien da de baja su cuenta, porque el CASCADE de
+  // Postgres no cruza de una base de datos a otra.
+  //
+  // Es idempotente: sobre un usuario que ya no tiene nada devuelve ceros.
+  //
+  // Como ValidateSession en user-service, NO lleva anotacion google.api.http,
+  // asi que no existe como endpoint REST, y ademas queda bloqueada en
+  // envoy.yaml para que no se alcance por la ruta de passthrough de gRPC. El
+  // unico que la llama es user-service, directo a library-service:50052.
+  rpc DeleteAuthorContent(DeleteAuthorContentRequest) returns (DeleteAuthorContentResponse);
 }
 
 // --- Entidades -------------------------------------------------------------
@@ -187,6 +211,12 @@ message Book {
   string status = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
+  // Cuantos capitulos tiene el libro. Sigue la misma regla de visibilidad que
+  // la lista de capitulos de GetBook: el autor cuenta todos los suyos, y
+  // cualquier otro solo los publicados. Si contara los borradores ajenos, el
+  // numero delataria obra inedita y no cuadraria con los capitulos que ese
+  // lector puede abrir.
+  int32 chapter_count = 9;
 }
 
 // status: draft / published.
@@ -222,20 +252,17 @@ message SavedBook {
 
 // --- Libros ----------------------------------------------------------------
 
-// El primer capitulo es parte de la creacion del libro: se insertan juntos.
-message FirstChapter {
-  string title = 1;
-  string content = 2;
-}
-
 message CreateBookRequest {
   string title = 1;
   string description = 2;
   string cover_url = 3;
-  // draft (por defecto) / published / archived.
+  // draft (por defecto) / archived. published no se acepta al crear: el libro
+  // nace vacio y un libro vacio no se publica.
   string status = 4;
-  // Si se omite, el capitulo se crea con un titulo por defecto.
-  FirstChapter first_chapter = 5;
+  // El 5 lo ocupaba first_chapter, que se quito: los capitulos se crean por
+  // CreateChapter. Reservado para que un cliente viejo no lo reutilice.
+  reserved 5;
+  reserved "first_chapter";
 }
 
 message ListBooksRequest {
@@ -443,4 +470,18 @@ message UnsaveBookRequest {
 
 message SavedBookResponse {
   SavedBook saved_book = 1;
+}
+
+// --- Baja de cuenta --------------------------------------------------------
+
+message DeleteAuthorContentRequest {
+  string user_id = 1;
+}
+
+// Los conteos son para el log de quien lo llama: dejan rastro de cuanto se
+// borro en una operacion que no tiene vuelta atras.
+message DeleteAuthorContentResponse {
+  int32 books_deleted = 1;
+  int32 sagas_deleted = 2;
+  int32 saved_books_deleted = 3;
 }

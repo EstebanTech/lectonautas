@@ -6,9 +6,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/cache"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/domain"
-	libraryv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/cache"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
+	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
 )
 
 // cachedSagaDetail es lo que se guarda en Valkey para GetSaga.
@@ -163,7 +163,7 @@ func (s *LibraryService) GetSaga(ctx context.Context, req *libraryv1.GetSagaRequ
 		}, nil
 	}
 
-	books, err := s.sagas.ListBooks(ctx, id)
+	books, err := s.sagas.ListBooks(ctx, id, callerID)
 	if err != nil {
 		return nil, mapRepoErr(err, "failed to load saga books")
 	}
@@ -282,7 +282,7 @@ func (s *LibraryService) AddBookToSaga(ctx context.Context, req *libraryv1.AddBo
 
 	s.invalidate(ctx)
 
-	books, err := s.sagas.ListBooks(ctx, sagaID)
+	books, err := s.sagas.ListBooks(ctx, sagaID, callerID)
 	if err != nil {
 		return nil, mapRepoErr(err, "failed to load saga books")
 	}
@@ -357,7 +357,7 @@ func (s *LibraryService) ReorderSagaBooks(ctx context.Context, req *libraryv1.Re
 
 	s.invalidate(ctx)
 
-	books, err := s.sagas.ListBooks(ctx, sagaID)
+	books, err := s.sagas.ListBooks(ctx, sagaID, callerID)
 	if err != nil {
 		return nil, mapRepoErr(err, "failed to load saga books")
 	}

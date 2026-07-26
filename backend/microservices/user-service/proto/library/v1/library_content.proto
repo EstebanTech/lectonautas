@@ -1,0 +1,31 @@
+syntax = "proto3";
+
+// Recorte del contrato de library-service con lo unico que este servicio le
+// llama: DeleteAuthorContent. El paquete, el nombre del servicio y los numeros
+// de campo son los mismos que alla, que es lo que define la compatibilidad en
+// el cable; el nombre de archivo es distinto para que ambos descriptores puedan
+// convivir.
+//
+// Mismo criterio que el user_auth.proto de library-service: cada servicio es
+// dueno de los stubs de cliente que usa. Si library.proto cambia
+// DeleteAuthorContent, hay que reflejarlo aqui.
+package library.v1;
+
+option go_package = "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/library/v1;libraryv1";
+
+service LibraryService {
+  // Borra los libros, sagas y guardados de un usuario que se da de baja. No
+  // tiene anotacion HTTP a proposito: se llama directo a library-service:50052,
+  // sin pasar por el gateway.
+  rpc DeleteAuthorContent(DeleteAuthorContentRequest) returns (DeleteAuthorContentResponse);
+}
+
+message DeleteAuthorContentRequest {
+  string user_id = 1;
+}
+
+message DeleteAuthorContentResponse {
+  int32 books_deleted = 1;
+  int32 sagas_deleted = 2;
+  int32 saved_books_deleted = 3;
+}

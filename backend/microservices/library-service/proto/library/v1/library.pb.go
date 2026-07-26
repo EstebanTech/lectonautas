@@ -25,15 +25,21 @@ const (
 
 // status: draft / published / archived.
 type Book struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	AuthorId      string                 `protobuf:"bytes,2,opt,name=author_id,json=authorId,proto3" json:"author_id,omitempty"`
-	Title         string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
-	Description   string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
-	CoverUrl      string                 `protobuf:"bytes,5,opt,name=cover_url,json=coverUrl,proto3" json:"cover_url,omitempty"`
-	Status        string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
-	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
-	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	AuthorId    string                 `protobuf:"bytes,2,opt,name=author_id,json=authorId,proto3" json:"author_id,omitempty"`
+	Title       string                 `protobuf:"bytes,3,opt,name=title,proto3" json:"title,omitempty"`
+	Description string                 `protobuf:"bytes,4,opt,name=description,proto3" json:"description,omitempty"`
+	CoverUrl    string                 `protobuf:"bytes,5,opt,name=cover_url,json=coverUrl,proto3" json:"cover_url,omitempty"`
+	Status      string                 `protobuf:"bytes,6,opt,name=status,proto3" json:"status,omitempty"`
+	CreatedAt   *timestamppb.Timestamp `protobuf:"bytes,7,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	UpdatedAt   *timestamppb.Timestamp `protobuf:"bytes,8,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
+	// Cuantos capitulos tiene el libro. Sigue la misma regla de visibilidad que
+	// la lista de capitulos de GetBook: el autor cuenta todos los suyos, y
+	// cualquier otro solo los publicados. Si contara los borradores ajenos, el
+	// numero delataria obra inedita y no cuadraria con los capitulos que ese
+	// lector puede abrir.
+	ChapterCount  int32 `protobuf:"varint,9,opt,name=chapter_count,json=chapterCount,proto3" json:"chapter_count,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -122,6 +128,13 @@ func (x *Book) GetUpdatedAt() *timestamppb.Timestamp {
 		return x.UpdatedAt
 	}
 	return nil
+}
+
+func (x *Book) GetChapterCount() int32 {
+	if x != nil {
+		return x.ChapterCount
+	}
+	return 0
 }
 
 // status: draft / published.
@@ -387,75 +400,21 @@ func (x *SavedBook) GetBook() *Book {
 	return nil
 }
 
-// El primer capitulo es parte de la creacion del libro: se insertan juntos.
-type FirstChapter struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Title         string                 `protobuf:"bytes,1,opt,name=title,proto3" json:"title,omitempty"`
-	Content       string                 `protobuf:"bytes,2,opt,name=content,proto3" json:"content,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *FirstChapter) Reset() {
-	*x = FirstChapter{}
-	mi := &file_library_v1_library_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *FirstChapter) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*FirstChapter) ProtoMessage() {}
-
-func (x *FirstChapter) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use FirstChapter.ProtoReflect.Descriptor instead.
-func (*FirstChapter) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *FirstChapter) GetTitle() string {
-	if x != nil {
-		return x.Title
-	}
-	return ""
-}
-
-func (x *FirstChapter) GetContent() string {
-	if x != nil {
-		return x.Content
-	}
-	return ""
-}
-
 type CreateBookRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	Title       string                 `protobuf:"bytes,1,opt,name=title,proto3" json:"title,omitempty"`
 	Description string                 `protobuf:"bytes,2,opt,name=description,proto3" json:"description,omitempty"`
 	CoverUrl    string                 `protobuf:"bytes,3,opt,name=cover_url,json=coverUrl,proto3" json:"cover_url,omitempty"`
-	// draft (por defecto) / published / archived.
-	Status string `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
-	// Si se omite, el capitulo se crea con un titulo por defecto.
-	FirstChapter  *FirstChapter `protobuf:"bytes,5,opt,name=first_chapter,json=firstChapter,proto3" json:"first_chapter,omitempty"`
+	// draft (por defecto) / archived. published no se acepta al crear: el libro
+	// nace vacio y un libro vacio no se publica.
+	Status        string `protobuf:"bytes,4,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateBookRequest) Reset() {
 	*x = CreateBookRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[5]
+	mi := &file_library_v1_library_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -467,7 +426,7 @@ func (x *CreateBookRequest) String() string {
 func (*CreateBookRequest) ProtoMessage() {}
 
 func (x *CreateBookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[5]
+	mi := &file_library_v1_library_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -480,7 +439,7 @@ func (x *CreateBookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateBookRequest.ProtoReflect.Descriptor instead.
 func (*CreateBookRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{5}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *CreateBookRequest) GetTitle() string {
@@ -511,13 +470,6 @@ func (x *CreateBookRequest) GetStatus() string {
 	return ""
 }
 
-func (x *CreateBookRequest) GetFirstChapter() *FirstChapter {
-	if x != nil {
-		return x.FirstChapter
-	}
-	return nil
-}
-
 type ListBooksRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Paginacion 1-based. page_size por defecto 20, maximo 100.
@@ -535,7 +487,7 @@ type ListBooksRequest struct {
 
 func (x *ListBooksRequest) Reset() {
 	*x = ListBooksRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[6]
+	mi := &file_library_v1_library_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -547,7 +499,7 @@ func (x *ListBooksRequest) String() string {
 func (*ListBooksRequest) ProtoMessage() {}
 
 func (x *ListBooksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[6]
+	mi := &file_library_v1_library_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -560,7 +512,7 @@ func (x *ListBooksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBooksRequest.ProtoReflect.Descriptor instead.
 func (*ListBooksRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{6}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *ListBooksRequest) GetPage() int32 {
@@ -613,7 +565,7 @@ type ListMyBooksRequest struct {
 
 func (x *ListMyBooksRequest) Reset() {
 	*x = ListMyBooksRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[7]
+	mi := &file_library_v1_library_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -625,7 +577,7 @@ func (x *ListMyBooksRequest) String() string {
 func (*ListMyBooksRequest) ProtoMessage() {}
 
 func (x *ListMyBooksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[7]
+	mi := &file_library_v1_library_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -638,7 +590,7 @@ func (x *ListMyBooksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMyBooksRequest.ProtoReflect.Descriptor instead.
 func (*ListMyBooksRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{7}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *ListMyBooksRequest) GetPage() int32 {
@@ -682,7 +634,7 @@ type ListBooksResponse struct {
 
 func (x *ListBooksResponse) Reset() {
 	*x = ListBooksResponse{}
-	mi := &file_library_v1_library_proto_msgTypes[8]
+	mi := &file_library_v1_library_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -694,7 +646,7 @@ func (x *ListBooksResponse) String() string {
 func (*ListBooksResponse) ProtoMessage() {}
 
 func (x *ListBooksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[8]
+	mi := &file_library_v1_library_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -707,7 +659,7 @@ func (x *ListBooksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListBooksResponse.ProtoReflect.Descriptor instead.
 func (*ListBooksResponse) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{8}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *ListBooksResponse) GetBooks() []*Book {
@@ -747,7 +699,7 @@ type GetBookRequest struct {
 
 func (x *GetBookRequest) Reset() {
 	*x = GetBookRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[9]
+	mi := &file_library_v1_library_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -759,7 +711,7 @@ func (x *GetBookRequest) String() string {
 func (*GetBookRequest) ProtoMessage() {}
 
 func (x *GetBookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[9]
+	mi := &file_library_v1_library_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -772,7 +724,7 @@ func (x *GetBookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetBookRequest.ProtoReflect.Descriptor instead.
 func (*GetBookRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{9}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *GetBookRequest) GetId() string {
@@ -791,7 +743,7 @@ type BookResponse struct {
 
 func (x *BookResponse) Reset() {
 	*x = BookResponse{}
-	mi := &file_library_v1_library_proto_msgTypes[10]
+	mi := &file_library_v1_library_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -803,7 +755,7 @@ func (x *BookResponse) String() string {
 func (*BookResponse) ProtoMessage() {}
 
 func (x *BookResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[10]
+	mi := &file_library_v1_library_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -816,7 +768,7 @@ func (x *BookResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BookResponse.ProtoReflect.Descriptor instead.
 func (*BookResponse) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{10}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *BookResponse) GetBook() *Book {
@@ -838,7 +790,7 @@ type BookDetailResponse struct {
 
 func (x *BookDetailResponse) Reset() {
 	*x = BookDetailResponse{}
-	mi := &file_library_v1_library_proto_msgTypes[11]
+	mi := &file_library_v1_library_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -850,7 +802,7 @@ func (x *BookDetailResponse) String() string {
 func (*BookDetailResponse) ProtoMessage() {}
 
 func (x *BookDetailResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[11]
+	mi := &file_library_v1_library_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -863,7 +815,7 @@ func (x *BookDetailResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BookDetailResponse.ProtoReflect.Descriptor instead.
 func (*BookDetailResponse) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{11}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *BookDetailResponse) GetBook() *Book {
@@ -893,7 +845,7 @@ type UpdateBookRequest struct {
 
 func (x *UpdateBookRequest) Reset() {
 	*x = UpdateBookRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[12]
+	mi := &file_library_v1_library_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -905,7 +857,7 @@ func (x *UpdateBookRequest) String() string {
 func (*UpdateBookRequest) ProtoMessage() {}
 
 func (x *UpdateBookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[12]
+	mi := &file_library_v1_library_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -918,7 +870,7 @@ func (x *UpdateBookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateBookRequest.ProtoReflect.Descriptor instead.
 func (*UpdateBookRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{12}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *UpdateBookRequest) GetId() string {
@@ -965,7 +917,7 @@ type DeleteBookRequest struct {
 
 func (x *DeleteBookRequest) Reset() {
 	*x = DeleteBookRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[13]
+	mi := &file_library_v1_library_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -977,7 +929,7 @@ func (x *DeleteBookRequest) String() string {
 func (*DeleteBookRequest) ProtoMessage() {}
 
 func (x *DeleteBookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[13]
+	mi := &file_library_v1_library_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -990,7 +942,7 @@ func (x *DeleteBookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteBookRequest.ProtoReflect.Descriptor instead.
 func (*DeleteBookRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{13}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *DeleteBookRequest) GetId() string {
@@ -1009,7 +961,7 @@ type DeleteResponse struct {
 
 func (x *DeleteResponse) Reset() {
 	*x = DeleteResponse{}
-	mi := &file_library_v1_library_proto_msgTypes[14]
+	mi := &file_library_v1_library_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1021,7 +973,7 @@ func (x *DeleteResponse) String() string {
 func (*DeleteResponse) ProtoMessage() {}
 
 func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[14]
+	mi := &file_library_v1_library_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1034,7 +986,7 @@ func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteResponse.ProtoReflect.Descriptor instead.
 func (*DeleteResponse) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{14}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *DeleteResponse) GetSuccess() bool {
@@ -1059,7 +1011,7 @@ type CreateChapterRequest struct {
 
 func (x *CreateChapterRequest) Reset() {
 	*x = CreateChapterRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[15]
+	mi := &file_library_v1_library_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1071,7 +1023,7 @@ func (x *CreateChapterRequest) String() string {
 func (*CreateChapterRequest) ProtoMessage() {}
 
 func (x *CreateChapterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[15]
+	mi := &file_library_v1_library_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1084,7 +1036,7 @@ func (x *CreateChapterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateChapterRequest.ProtoReflect.Descriptor instead.
 func (*CreateChapterRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{15}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *CreateChapterRequest) GetBookId() string {
@@ -1132,7 +1084,7 @@ type GetChapterRequest struct {
 
 func (x *GetChapterRequest) Reset() {
 	*x = GetChapterRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[16]
+	mi := &file_library_v1_library_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1144,7 +1096,7 @@ func (x *GetChapterRequest) String() string {
 func (*GetChapterRequest) ProtoMessage() {}
 
 func (x *GetChapterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[16]
+	mi := &file_library_v1_library_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1157,7 +1109,7 @@ func (x *GetChapterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetChapterRequest.ProtoReflect.Descriptor instead.
 func (*GetChapterRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{16}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *GetChapterRequest) GetBookId() string {
@@ -1187,7 +1139,7 @@ type UpdateChapterRequest struct {
 
 func (x *UpdateChapterRequest) Reset() {
 	*x = UpdateChapterRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[17]
+	mi := &file_library_v1_library_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1199,7 +1151,7 @@ func (x *UpdateChapterRequest) String() string {
 func (*UpdateChapterRequest) ProtoMessage() {}
 
 func (x *UpdateChapterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[17]
+	mi := &file_library_v1_library_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1212,7 +1164,7 @@ func (x *UpdateChapterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateChapterRequest.ProtoReflect.Descriptor instead.
 func (*UpdateChapterRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{17}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *UpdateChapterRequest) GetBookId() string {
@@ -1260,7 +1212,7 @@ type DeleteChapterRequest struct {
 
 func (x *DeleteChapterRequest) Reset() {
 	*x = DeleteChapterRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[18]
+	mi := &file_library_v1_library_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1272,7 +1224,7 @@ func (x *DeleteChapterRequest) String() string {
 func (*DeleteChapterRequest) ProtoMessage() {}
 
 func (x *DeleteChapterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[18]
+	mi := &file_library_v1_library_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1285,7 +1237,7 @@ func (x *DeleteChapterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteChapterRequest.ProtoReflect.Descriptor instead.
 func (*DeleteChapterRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{18}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *DeleteChapterRequest) GetBookId() string {
@@ -1313,7 +1265,7 @@ type ReorderChaptersRequest struct {
 
 func (x *ReorderChaptersRequest) Reset() {
 	*x = ReorderChaptersRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[19]
+	mi := &file_library_v1_library_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1325,7 +1277,7 @@ func (x *ReorderChaptersRequest) String() string {
 func (*ReorderChaptersRequest) ProtoMessage() {}
 
 func (x *ReorderChaptersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[19]
+	mi := &file_library_v1_library_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1338,7 +1290,7 @@ func (x *ReorderChaptersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReorderChaptersRequest.ProtoReflect.Descriptor instead.
 func (*ReorderChaptersRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{19}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *ReorderChaptersRequest) GetBookId() string {
@@ -1364,7 +1316,7 @@ type ReorderChaptersResponse struct {
 
 func (x *ReorderChaptersResponse) Reset() {
 	*x = ReorderChaptersResponse{}
-	mi := &file_library_v1_library_proto_msgTypes[20]
+	mi := &file_library_v1_library_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1376,7 +1328,7 @@ func (x *ReorderChaptersResponse) String() string {
 func (*ReorderChaptersResponse) ProtoMessage() {}
 
 func (x *ReorderChaptersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[20]
+	mi := &file_library_v1_library_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1389,7 +1341,7 @@ func (x *ReorderChaptersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReorderChaptersResponse.ProtoReflect.Descriptor instead.
 func (*ReorderChaptersResponse) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{20}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *ReorderChaptersResponse) GetChapters() []*Chapter {
@@ -1408,7 +1360,7 @@ type ChapterResponse struct {
 
 func (x *ChapterResponse) Reset() {
 	*x = ChapterResponse{}
-	mi := &file_library_v1_library_proto_msgTypes[21]
+	mi := &file_library_v1_library_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1420,7 +1372,7 @@ func (x *ChapterResponse) String() string {
 func (*ChapterResponse) ProtoMessage() {}
 
 func (x *ChapterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[21]
+	mi := &file_library_v1_library_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1433,7 +1385,7 @@ func (x *ChapterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChapterResponse.ProtoReflect.Descriptor instead.
 func (*ChapterResponse) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{21}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *ChapterResponse) GetChapter() *Chapter {
@@ -1453,7 +1405,7 @@ type CreateSagaRequest struct {
 
 func (x *CreateSagaRequest) Reset() {
 	*x = CreateSagaRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[22]
+	mi := &file_library_v1_library_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1465,7 +1417,7 @@ func (x *CreateSagaRequest) String() string {
 func (*CreateSagaRequest) ProtoMessage() {}
 
 func (x *CreateSagaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[22]
+	mi := &file_library_v1_library_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1478,7 +1430,7 @@ func (x *CreateSagaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateSagaRequest.ProtoReflect.Descriptor instead.
 func (*CreateSagaRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{22}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *CreateSagaRequest) GetTitle() string {
@@ -1510,7 +1462,7 @@ type ListSagasRequest struct {
 
 func (x *ListSagasRequest) Reset() {
 	*x = ListSagasRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[23]
+	mi := &file_library_v1_library_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1522,7 +1474,7 @@ func (x *ListSagasRequest) String() string {
 func (*ListSagasRequest) ProtoMessage() {}
 
 func (x *ListSagasRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[23]
+	mi := &file_library_v1_library_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1535,7 +1487,7 @@ func (x *ListSagasRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSagasRequest.ProtoReflect.Descriptor instead.
 func (*ListSagasRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{23}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ListSagasRequest) GetPage() int32 {
@@ -1578,7 +1530,7 @@ type ListMySagasRequest struct {
 
 func (x *ListMySagasRequest) Reset() {
 	*x = ListMySagasRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[24]
+	mi := &file_library_v1_library_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1590,7 +1542,7 @@ func (x *ListMySagasRequest) String() string {
 func (*ListMySagasRequest) ProtoMessage() {}
 
 func (x *ListMySagasRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[24]
+	mi := &file_library_v1_library_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1603,7 +1555,7 @@ func (x *ListMySagasRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListMySagasRequest.ProtoReflect.Descriptor instead.
 func (*ListMySagasRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{24}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ListMySagasRequest) GetPage() int32 {
@@ -1640,7 +1592,7 @@ type ListSagasResponse struct {
 
 func (x *ListSagasResponse) Reset() {
 	*x = ListSagasResponse{}
-	mi := &file_library_v1_library_proto_msgTypes[25]
+	mi := &file_library_v1_library_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1652,7 +1604,7 @@ func (x *ListSagasResponse) String() string {
 func (*ListSagasResponse) ProtoMessage() {}
 
 func (x *ListSagasResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[25]
+	mi := &file_library_v1_library_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1665,7 +1617,7 @@ func (x *ListSagasResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSagasResponse.ProtoReflect.Descriptor instead.
 func (*ListSagasResponse) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{25}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ListSagasResponse) GetSagas() []*Saga {
@@ -1705,7 +1657,7 @@ type GetSagaRequest struct {
 
 func (x *GetSagaRequest) Reset() {
 	*x = GetSagaRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[26]
+	mi := &file_library_v1_library_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1717,7 +1669,7 @@ func (x *GetSagaRequest) String() string {
 func (*GetSagaRequest) ProtoMessage() {}
 
 func (x *GetSagaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[26]
+	mi := &file_library_v1_library_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1730,7 +1682,7 @@ func (x *GetSagaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetSagaRequest.ProtoReflect.Descriptor instead.
 func (*GetSagaRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{26}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetSagaRequest) GetId() string {
@@ -1751,7 +1703,7 @@ type UpdateSagaRequest struct {
 
 func (x *UpdateSagaRequest) Reset() {
 	*x = UpdateSagaRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[27]
+	mi := &file_library_v1_library_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1763,7 +1715,7 @@ func (x *UpdateSagaRequest) String() string {
 func (*UpdateSagaRequest) ProtoMessage() {}
 
 func (x *UpdateSagaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[27]
+	mi := &file_library_v1_library_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1776,7 +1728,7 @@ func (x *UpdateSagaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateSagaRequest.ProtoReflect.Descriptor instead.
 func (*UpdateSagaRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{27}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *UpdateSagaRequest) GetId() string {
@@ -1809,7 +1761,7 @@ type DeleteSagaRequest struct {
 
 func (x *DeleteSagaRequest) Reset() {
 	*x = DeleteSagaRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[28]
+	mi := &file_library_v1_library_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1821,7 +1773,7 @@ func (x *DeleteSagaRequest) String() string {
 func (*DeleteSagaRequest) ProtoMessage() {}
 
 func (x *DeleteSagaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[28]
+	mi := &file_library_v1_library_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1834,7 +1786,7 @@ func (x *DeleteSagaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteSagaRequest.ProtoReflect.Descriptor instead.
 func (*DeleteSagaRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{28}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *DeleteSagaRequest) GetId() string {
@@ -1853,7 +1805,7 @@ type SagaResponse struct {
 
 func (x *SagaResponse) Reset() {
 	*x = SagaResponse{}
-	mi := &file_library_v1_library_proto_msgTypes[29]
+	mi := &file_library_v1_library_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1865,7 +1817,7 @@ func (x *SagaResponse) String() string {
 func (*SagaResponse) ProtoMessage() {}
 
 func (x *SagaResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[29]
+	mi := &file_library_v1_library_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1878,7 +1830,7 @@ func (x *SagaResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SagaResponse.ProtoReflect.Descriptor instead.
 func (*SagaResponse) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{29}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SagaResponse) GetSaga() *Saga {
@@ -1899,7 +1851,7 @@ type SagaDetailResponse struct {
 
 func (x *SagaDetailResponse) Reset() {
 	*x = SagaDetailResponse{}
-	mi := &file_library_v1_library_proto_msgTypes[30]
+	mi := &file_library_v1_library_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1911,7 +1863,7 @@ func (x *SagaDetailResponse) String() string {
 func (*SagaDetailResponse) ProtoMessage() {}
 
 func (x *SagaDetailResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[30]
+	mi := &file_library_v1_library_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1924,7 +1876,7 @@ func (x *SagaDetailResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SagaDetailResponse.ProtoReflect.Descriptor instead.
 func (*SagaDetailResponse) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{30}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *SagaDetailResponse) GetSaga() *Saga {
@@ -1953,7 +1905,7 @@ type AddBookToSagaRequest struct {
 
 func (x *AddBookToSagaRequest) Reset() {
 	*x = AddBookToSagaRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[31]
+	mi := &file_library_v1_library_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1965,7 +1917,7 @@ func (x *AddBookToSagaRequest) String() string {
 func (*AddBookToSagaRequest) ProtoMessage() {}
 
 func (x *AddBookToSagaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[31]
+	mi := &file_library_v1_library_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1978,7 +1930,7 @@ func (x *AddBookToSagaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddBookToSagaRequest.ProtoReflect.Descriptor instead.
 func (*AddBookToSagaRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{31}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *AddBookToSagaRequest) GetSagaId() string {
@@ -2012,7 +1964,7 @@ type RemoveBookFromSagaRequest struct {
 
 func (x *RemoveBookFromSagaRequest) Reset() {
 	*x = RemoveBookFromSagaRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[32]
+	mi := &file_library_v1_library_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2024,7 +1976,7 @@ func (x *RemoveBookFromSagaRequest) String() string {
 func (*RemoveBookFromSagaRequest) ProtoMessage() {}
 
 func (x *RemoveBookFromSagaRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[32]
+	mi := &file_library_v1_library_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2037,7 +1989,7 @@ func (x *RemoveBookFromSagaRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveBookFromSagaRequest.ProtoReflect.Descriptor instead.
 func (*RemoveBookFromSagaRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{32}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *RemoveBookFromSagaRequest) GetSagaId() string {
@@ -2065,7 +2017,7 @@ type ReorderSagaBooksRequest struct {
 
 func (x *ReorderSagaBooksRequest) Reset() {
 	*x = ReorderSagaBooksRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[33]
+	mi := &file_library_v1_library_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2077,7 +2029,7 @@ func (x *ReorderSagaBooksRequest) String() string {
 func (*ReorderSagaBooksRequest) ProtoMessage() {}
 
 func (x *ReorderSagaBooksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[33]
+	mi := &file_library_v1_library_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2090,7 +2042,7 @@ func (x *ReorderSagaBooksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReorderSagaBooksRequest.ProtoReflect.Descriptor instead.
 func (*ReorderSagaBooksRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{33}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ReorderSagaBooksRequest) GetSagaId() string {
@@ -2118,7 +2070,7 @@ type SaveBookRequest struct {
 
 func (x *SaveBookRequest) Reset() {
 	*x = SaveBookRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[34]
+	mi := &file_library_v1_library_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2130,7 +2082,7 @@ func (x *SaveBookRequest) String() string {
 func (*SaveBookRequest) ProtoMessage() {}
 
 func (x *SaveBookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[34]
+	mi := &file_library_v1_library_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2143,7 +2095,7 @@ func (x *SaveBookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SaveBookRequest.ProtoReflect.Descriptor instead.
 func (*SaveBookRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{34}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *SaveBookRequest) GetBookId() string {
@@ -2170,7 +2122,7 @@ type ListSavedBooksRequest struct {
 
 func (x *ListSavedBooksRequest) Reset() {
 	*x = ListSavedBooksRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[35]
+	mi := &file_library_v1_library_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2182,7 +2134,7 @@ func (x *ListSavedBooksRequest) String() string {
 func (*ListSavedBooksRequest) ProtoMessage() {}
 
 func (x *ListSavedBooksRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[35]
+	mi := &file_library_v1_library_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2195,7 +2147,7 @@ func (x *ListSavedBooksRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSavedBooksRequest.ProtoReflect.Descriptor instead.
 func (*ListSavedBooksRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{35}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *ListSavedBooksRequest) GetKind() string {
@@ -2215,7 +2167,7 @@ type ListSavedBooksResponse struct {
 
 func (x *ListSavedBooksResponse) Reset() {
 	*x = ListSavedBooksResponse{}
-	mi := &file_library_v1_library_proto_msgTypes[36]
+	mi := &file_library_v1_library_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2227,7 +2179,7 @@ func (x *ListSavedBooksResponse) String() string {
 func (*ListSavedBooksResponse) ProtoMessage() {}
 
 func (x *ListSavedBooksResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[36]
+	mi := &file_library_v1_library_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2240,7 +2192,7 @@ func (x *ListSavedBooksResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSavedBooksResponse.ProtoReflect.Descriptor instead.
 func (*ListSavedBooksResponse) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{36}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *ListSavedBooksResponse) GetSavedBooks() []*SavedBook {
@@ -2268,7 +2220,7 @@ type UnsaveBookRequest struct {
 
 func (x *UnsaveBookRequest) Reset() {
 	*x = UnsaveBookRequest{}
-	mi := &file_library_v1_library_proto_msgTypes[37]
+	mi := &file_library_v1_library_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2280,7 +2232,7 @@ func (x *UnsaveBookRequest) String() string {
 func (*UnsaveBookRequest) ProtoMessage() {}
 
 func (x *UnsaveBookRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[37]
+	mi := &file_library_v1_library_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2293,7 +2245,7 @@ func (x *UnsaveBookRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UnsaveBookRequest.ProtoReflect.Descriptor instead.
 func (*UnsaveBookRequest) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{37}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *UnsaveBookRequest) GetBookId() string {
@@ -2319,7 +2271,7 @@ type SavedBookResponse struct {
 
 func (x *SavedBookResponse) Reset() {
 	*x = SavedBookResponse{}
-	mi := &file_library_v1_library_proto_msgTypes[38]
+	mi := &file_library_v1_library_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2331,7 +2283,7 @@ func (x *SavedBookResponse) String() string {
 func (*SavedBookResponse) ProtoMessage() {}
 
 func (x *SavedBookResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_library_v1_library_proto_msgTypes[38]
+	mi := &file_library_v1_library_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2344,7 +2296,7 @@ func (x *SavedBookResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SavedBookResponse.ProtoReflect.Descriptor instead.
 func (*SavedBookResponse) Descriptor() ([]byte, []int) {
-	return file_library_v1_library_proto_rawDescGZIP(), []int{38}
+	return file_library_v1_library_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *SavedBookResponse) GetSavedBook() *SavedBook {
@@ -2354,12 +2306,118 @@ func (x *SavedBookResponse) GetSavedBook() *SavedBook {
 	return nil
 }
 
+type DeleteAuthorContentRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	UserId        string                 `protobuf:"bytes,1,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeleteAuthorContentRequest) Reset() {
+	*x = DeleteAuthorContentRequest{}
+	mi := &file_library_v1_library_proto_msgTypes[38]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteAuthorContentRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteAuthorContentRequest) ProtoMessage() {}
+
+func (x *DeleteAuthorContentRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_library_v1_library_proto_msgTypes[38]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteAuthorContentRequest.ProtoReflect.Descriptor instead.
+func (*DeleteAuthorContentRequest) Descriptor() ([]byte, []int) {
+	return file_library_v1_library_proto_rawDescGZIP(), []int{38}
+}
+
+func (x *DeleteAuthorContentRequest) GetUserId() string {
+	if x != nil {
+		return x.UserId
+	}
+	return ""
+}
+
+// Los conteos son para el log de quien lo llama: dejan rastro de cuanto se
+// borro en una operacion que no tiene vuelta atras.
+type DeleteAuthorContentResponse struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	BooksDeleted      int32                  `protobuf:"varint,1,opt,name=books_deleted,json=booksDeleted,proto3" json:"books_deleted,omitempty"`
+	SagasDeleted      int32                  `protobuf:"varint,2,opt,name=sagas_deleted,json=sagasDeleted,proto3" json:"sagas_deleted,omitempty"`
+	SavedBooksDeleted int32                  `protobuf:"varint,3,opt,name=saved_books_deleted,json=savedBooksDeleted,proto3" json:"saved_books_deleted,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *DeleteAuthorContentResponse) Reset() {
+	*x = DeleteAuthorContentResponse{}
+	mi := &file_library_v1_library_proto_msgTypes[39]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeleteAuthorContentResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeleteAuthorContentResponse) ProtoMessage() {}
+
+func (x *DeleteAuthorContentResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_library_v1_library_proto_msgTypes[39]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeleteAuthorContentResponse.ProtoReflect.Descriptor instead.
+func (*DeleteAuthorContentResponse) Descriptor() ([]byte, []int) {
+	return file_library_v1_library_proto_rawDescGZIP(), []int{39}
+}
+
+func (x *DeleteAuthorContentResponse) GetBooksDeleted() int32 {
+	if x != nil {
+		return x.BooksDeleted
+	}
+	return 0
+}
+
+func (x *DeleteAuthorContentResponse) GetSagasDeleted() int32 {
+	if x != nil {
+		return x.SagasDeleted
+	}
+	return 0
+}
+
+func (x *DeleteAuthorContentResponse) GetSavedBooksDeleted() int32 {
+	if x != nil {
+		return x.SavedBooksDeleted
+	}
+	return 0
+}
+
 var File_library_v1_library_proto protoreflect.FileDescriptor
 
 const file_library_v1_library_proto_rawDesc = "" +
 	"\n" +
 	"\x18library/v1/library.proto\x12\n" +
-	"library.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\x96\x02\n" +
+	"library.v1\x1a\x1cgoogle/api/annotations.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbb\x02\n" +
 	"\x04Book\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x1b\n" +
 	"\tauthor_id\x18\x02 \x01(\tR\bauthorId\x12\x14\n" +
@@ -2370,7 +2428,8 @@ const file_library_v1_library_proto_rawDesc = "" +
 	"\n" +
 	"created_at\x18\a \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
-	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\"\x8c\x02\n" +
+	"updated_at\x18\b \x01(\v2\x1a.google.protobuf.TimestampR\tupdatedAt\x12#\n" +
+	"\rchapter_count\x18\t \x01(\x05R\fchapterCount\"\x8c\x02\n" +
 	"\aChapter\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x17\n" +
 	"\abook_id\x18\x02 \x01(\tR\x06bookId\x12\x14\n" +
@@ -2397,16 +2456,12 @@ const file_library_v1_library_proto_rawDesc = "" +
 	"\x04kind\x18\x03 \x01(\tR\x04kind\x129\n" +
 	"\n" +
 	"created_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x12$\n" +
-	"\x04book\x18\x05 \x01(\v2\x10.library.v1.BookR\x04book\">\n" +
-	"\fFirstChapter\x12\x14\n" +
-	"\x05title\x18\x01 \x01(\tR\x05title\x12\x18\n" +
-	"\acontent\x18\x02 \x01(\tR\acontent\"\xbf\x01\n" +
+	"\x04book\x18\x05 \x01(\v2\x10.library.v1.BookR\x04book\"\x95\x01\n" +
 	"\x11CreateBookRequest\x12\x14\n" +
 	"\x05title\x18\x01 \x01(\tR\x05title\x12 \n" +
 	"\vdescription\x18\x02 \x01(\tR\vdescription\x12\x1b\n" +
 	"\tcover_url\x18\x03 \x01(\tR\bcoverUrl\x12\x16\n" +
-	"\x06status\x18\x04 \x01(\tR\x06status\x12=\n" +
-	"\rfirst_chapter\x18\x05 \x01(\v2\x18.library.v1.FirstChapterR\ffirstChapter\"\x90\x01\n" +
+	"\x06status\x18\x04 \x01(\tR\x06statusJ\x04\b\x05\x10\x06R\rfirst_chapter\"\x90\x01\n" +
 	"\x10ListBooksRequest\x12\x12\n" +
 	"\x04page\x18\x01 \x01(\x05R\x04page\x12\x1b\n" +
 	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1b\n" +
@@ -2531,7 +2586,13 @@ const file_library_v1_library_proto_rawDesc = "" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\"I\n" +
 	"\x11SavedBookResponse\x124\n" +
 	"\n" +
-	"saved_book\x18\x01 \x01(\v2\x15.library.v1.SavedBookR\tsavedBook2\xc6\x13\n" +
+	"saved_book\x18\x01 \x01(\v2\x15.library.v1.SavedBookR\tsavedBook\"5\n" +
+	"\x1aDeleteAuthorContentRequest\x12\x17\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\"\x97\x01\n" +
+	"\x1bDeleteAuthorContentResponse\x12#\n" +
+	"\rbooks_deleted\x18\x01 \x01(\x05R\fbooksDeleted\x12#\n" +
+	"\rsagas_deleted\x18\x02 \x01(\x05R\fsagasDeleted\x12.\n" +
+	"\x13saved_books_deleted\x18\x03 \x01(\x05R\x11savedBooksDeleted2\xae\x14\n" +
 	"\x0eLibraryService\x12[\n" +
 	"\n" +
 	"CreateBook\x12\x1d.library.v1.CreateBookRequest\x1a\x18.library.v1.BookResponse\"\x14\x82\xd3\xe4\x93\x02\x0e:\x01*\"\t/v1/books\x12[\n" +
@@ -2563,7 +2624,8 @@ const file_library_v1_library_proto_rawDesc = "" +
 	"\bSaveBook\x12\x1b.library.v1.SaveBookRequest\x1a\x1d.library.v1.SavedBookResponse\"\x16\x82\xd3\xe4\x93\x02\x10:\x01*\"\v/v1/library\x12l\n" +
 	"\x0eListSavedBooks\x12!.library.v1.ListSavedBooksRequest\x1a\".library.v1.ListSavedBooksResponse\"\x13\x82\xd3\xe4\x93\x02\r\x12\v/v1/library\x12f\n" +
 	"\n" +
-	"UnsaveBook\x12\x1d.library.v1.UnsaveBookRequest\x1a\x1a.library.v1.DeleteResponse\"\x1d\x82\xd3\xe4\x93\x02\x17*\x15/v1/library/{book_id}BlZjgithub.com/estebandeveloper20/lectonautas/backend/microservices/library-service/proto/library/v1;libraryv1b\x06proto3"
+	"UnsaveBook\x12\x1d.library.v1.UnsaveBookRequest\x1a\x1a.library.v1.DeleteResponse\"\x1d\x82\xd3\xe4\x93\x02\x17*\x15/v1/library/{book_id}\x12f\n" +
+	"\x13DeleteAuthorContent\x12&.library.v1.DeleteAuthorContentRequest\x1a'.library.v1.DeleteAuthorContentResponseBeZcgithub.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1;libraryv1b\x06proto3"
 
 var (
 	file_library_v1_library_proto_rawDescOnce sync.Once
@@ -2577,122 +2639,124 @@ func file_library_v1_library_proto_rawDescGZIP() []byte {
 	return file_library_v1_library_proto_rawDescData
 }
 
-var file_library_v1_library_proto_msgTypes = make([]protoimpl.MessageInfo, 39)
+var file_library_v1_library_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
 var file_library_v1_library_proto_goTypes = []any{
-	(*Book)(nil),                      // 0: library.v1.Book
-	(*Chapter)(nil),                   // 1: library.v1.Chapter
-	(*Saga)(nil),                      // 2: library.v1.Saga
-	(*SavedBook)(nil),                 // 3: library.v1.SavedBook
-	(*FirstChapter)(nil),              // 4: library.v1.FirstChapter
-	(*CreateBookRequest)(nil),         // 5: library.v1.CreateBookRequest
-	(*ListBooksRequest)(nil),          // 6: library.v1.ListBooksRequest
-	(*ListMyBooksRequest)(nil),        // 7: library.v1.ListMyBooksRequest
-	(*ListBooksResponse)(nil),         // 8: library.v1.ListBooksResponse
-	(*GetBookRequest)(nil),            // 9: library.v1.GetBookRequest
-	(*BookResponse)(nil),              // 10: library.v1.BookResponse
-	(*BookDetailResponse)(nil),        // 11: library.v1.BookDetailResponse
-	(*UpdateBookRequest)(nil),         // 12: library.v1.UpdateBookRequest
-	(*DeleteBookRequest)(nil),         // 13: library.v1.DeleteBookRequest
-	(*DeleteResponse)(nil),            // 14: library.v1.DeleteResponse
-	(*CreateChapterRequest)(nil),      // 15: library.v1.CreateChapterRequest
-	(*GetChapterRequest)(nil),         // 16: library.v1.GetChapterRequest
-	(*UpdateChapterRequest)(nil),      // 17: library.v1.UpdateChapterRequest
-	(*DeleteChapterRequest)(nil),      // 18: library.v1.DeleteChapterRequest
-	(*ReorderChaptersRequest)(nil),    // 19: library.v1.ReorderChaptersRequest
-	(*ReorderChaptersResponse)(nil),   // 20: library.v1.ReorderChaptersResponse
-	(*ChapterResponse)(nil),           // 21: library.v1.ChapterResponse
-	(*CreateSagaRequest)(nil),         // 22: library.v1.CreateSagaRequest
-	(*ListSagasRequest)(nil),          // 23: library.v1.ListSagasRequest
-	(*ListMySagasRequest)(nil),        // 24: library.v1.ListMySagasRequest
-	(*ListSagasResponse)(nil),         // 25: library.v1.ListSagasResponse
-	(*GetSagaRequest)(nil),            // 26: library.v1.GetSagaRequest
-	(*UpdateSagaRequest)(nil),         // 27: library.v1.UpdateSagaRequest
-	(*DeleteSagaRequest)(nil),         // 28: library.v1.DeleteSagaRequest
-	(*SagaResponse)(nil),              // 29: library.v1.SagaResponse
-	(*SagaDetailResponse)(nil),        // 30: library.v1.SagaDetailResponse
-	(*AddBookToSagaRequest)(nil),      // 31: library.v1.AddBookToSagaRequest
-	(*RemoveBookFromSagaRequest)(nil), // 32: library.v1.RemoveBookFromSagaRequest
-	(*ReorderSagaBooksRequest)(nil),   // 33: library.v1.ReorderSagaBooksRequest
-	(*SaveBookRequest)(nil),           // 34: library.v1.SaveBookRequest
-	(*ListSavedBooksRequest)(nil),     // 35: library.v1.ListSavedBooksRequest
-	(*ListSavedBooksResponse)(nil),    // 36: library.v1.ListSavedBooksResponse
-	(*UnsaveBookRequest)(nil),         // 37: library.v1.UnsaveBookRequest
-	(*SavedBookResponse)(nil),         // 38: library.v1.SavedBookResponse
-	(*timestamppb.Timestamp)(nil),     // 39: google.protobuf.Timestamp
+	(*Book)(nil),                        // 0: library.v1.Book
+	(*Chapter)(nil),                     // 1: library.v1.Chapter
+	(*Saga)(nil),                        // 2: library.v1.Saga
+	(*SavedBook)(nil),                   // 3: library.v1.SavedBook
+	(*CreateBookRequest)(nil),           // 4: library.v1.CreateBookRequest
+	(*ListBooksRequest)(nil),            // 5: library.v1.ListBooksRequest
+	(*ListMyBooksRequest)(nil),          // 6: library.v1.ListMyBooksRequest
+	(*ListBooksResponse)(nil),           // 7: library.v1.ListBooksResponse
+	(*GetBookRequest)(nil),              // 8: library.v1.GetBookRequest
+	(*BookResponse)(nil),                // 9: library.v1.BookResponse
+	(*BookDetailResponse)(nil),          // 10: library.v1.BookDetailResponse
+	(*UpdateBookRequest)(nil),           // 11: library.v1.UpdateBookRequest
+	(*DeleteBookRequest)(nil),           // 12: library.v1.DeleteBookRequest
+	(*DeleteResponse)(nil),              // 13: library.v1.DeleteResponse
+	(*CreateChapterRequest)(nil),        // 14: library.v1.CreateChapterRequest
+	(*GetChapterRequest)(nil),           // 15: library.v1.GetChapterRequest
+	(*UpdateChapterRequest)(nil),        // 16: library.v1.UpdateChapterRequest
+	(*DeleteChapterRequest)(nil),        // 17: library.v1.DeleteChapterRequest
+	(*ReorderChaptersRequest)(nil),      // 18: library.v1.ReorderChaptersRequest
+	(*ReorderChaptersResponse)(nil),     // 19: library.v1.ReorderChaptersResponse
+	(*ChapterResponse)(nil),             // 20: library.v1.ChapterResponse
+	(*CreateSagaRequest)(nil),           // 21: library.v1.CreateSagaRequest
+	(*ListSagasRequest)(nil),            // 22: library.v1.ListSagasRequest
+	(*ListMySagasRequest)(nil),          // 23: library.v1.ListMySagasRequest
+	(*ListSagasResponse)(nil),           // 24: library.v1.ListSagasResponse
+	(*GetSagaRequest)(nil),              // 25: library.v1.GetSagaRequest
+	(*UpdateSagaRequest)(nil),           // 26: library.v1.UpdateSagaRequest
+	(*DeleteSagaRequest)(nil),           // 27: library.v1.DeleteSagaRequest
+	(*SagaResponse)(nil),                // 28: library.v1.SagaResponse
+	(*SagaDetailResponse)(nil),          // 29: library.v1.SagaDetailResponse
+	(*AddBookToSagaRequest)(nil),        // 30: library.v1.AddBookToSagaRequest
+	(*RemoveBookFromSagaRequest)(nil),   // 31: library.v1.RemoveBookFromSagaRequest
+	(*ReorderSagaBooksRequest)(nil),     // 32: library.v1.ReorderSagaBooksRequest
+	(*SaveBookRequest)(nil),             // 33: library.v1.SaveBookRequest
+	(*ListSavedBooksRequest)(nil),       // 34: library.v1.ListSavedBooksRequest
+	(*ListSavedBooksResponse)(nil),      // 35: library.v1.ListSavedBooksResponse
+	(*UnsaveBookRequest)(nil),           // 36: library.v1.UnsaveBookRequest
+	(*SavedBookResponse)(nil),           // 37: library.v1.SavedBookResponse
+	(*DeleteAuthorContentRequest)(nil),  // 38: library.v1.DeleteAuthorContentRequest
+	(*DeleteAuthorContentResponse)(nil), // 39: library.v1.DeleteAuthorContentResponse
+	(*timestamppb.Timestamp)(nil),       // 40: google.protobuf.Timestamp
 }
 var file_library_v1_library_proto_depIdxs = []int32{
-	39, // 0: library.v1.Book.created_at:type_name -> google.protobuf.Timestamp
-	39, // 1: library.v1.Book.updated_at:type_name -> google.protobuf.Timestamp
-	39, // 2: library.v1.Chapter.created_at:type_name -> google.protobuf.Timestamp
-	39, // 3: library.v1.Chapter.updated_at:type_name -> google.protobuf.Timestamp
-	39, // 4: library.v1.Saga.created_at:type_name -> google.protobuf.Timestamp
-	39, // 5: library.v1.Saga.updated_at:type_name -> google.protobuf.Timestamp
-	39, // 6: library.v1.SavedBook.created_at:type_name -> google.protobuf.Timestamp
+	40, // 0: library.v1.Book.created_at:type_name -> google.protobuf.Timestamp
+	40, // 1: library.v1.Book.updated_at:type_name -> google.protobuf.Timestamp
+	40, // 2: library.v1.Chapter.created_at:type_name -> google.protobuf.Timestamp
+	40, // 3: library.v1.Chapter.updated_at:type_name -> google.protobuf.Timestamp
+	40, // 4: library.v1.Saga.created_at:type_name -> google.protobuf.Timestamp
+	40, // 5: library.v1.Saga.updated_at:type_name -> google.protobuf.Timestamp
+	40, // 6: library.v1.SavedBook.created_at:type_name -> google.protobuf.Timestamp
 	0,  // 7: library.v1.SavedBook.book:type_name -> library.v1.Book
-	4,  // 8: library.v1.CreateBookRequest.first_chapter:type_name -> library.v1.FirstChapter
-	0,  // 9: library.v1.ListBooksResponse.books:type_name -> library.v1.Book
-	0,  // 10: library.v1.BookResponse.book:type_name -> library.v1.Book
-	0,  // 11: library.v1.BookDetailResponse.book:type_name -> library.v1.Book
-	1,  // 12: library.v1.BookDetailResponse.chapters:type_name -> library.v1.Chapter
-	1,  // 13: library.v1.ReorderChaptersResponse.chapters:type_name -> library.v1.Chapter
-	1,  // 14: library.v1.ChapterResponse.chapter:type_name -> library.v1.Chapter
-	2,  // 15: library.v1.ListSagasResponse.sagas:type_name -> library.v1.Saga
-	2,  // 16: library.v1.SagaResponse.saga:type_name -> library.v1.Saga
-	2,  // 17: library.v1.SagaDetailResponse.saga:type_name -> library.v1.Saga
-	0,  // 18: library.v1.SagaDetailResponse.books:type_name -> library.v1.Book
-	3,  // 19: library.v1.ListSavedBooksResponse.saved_books:type_name -> library.v1.SavedBook
-	3,  // 20: library.v1.SavedBookResponse.saved_book:type_name -> library.v1.SavedBook
-	5,  // 21: library.v1.LibraryService.CreateBook:input_type -> library.v1.CreateBookRequest
-	6,  // 22: library.v1.LibraryService.ListBooks:input_type -> library.v1.ListBooksRequest
-	7,  // 23: library.v1.LibraryService.ListMyBooks:input_type -> library.v1.ListMyBooksRequest
-	9,  // 24: library.v1.LibraryService.GetBook:input_type -> library.v1.GetBookRequest
-	12, // 25: library.v1.LibraryService.UpdateBook:input_type -> library.v1.UpdateBookRequest
-	13, // 26: library.v1.LibraryService.DeleteBook:input_type -> library.v1.DeleteBookRequest
-	15, // 27: library.v1.LibraryService.CreateChapter:input_type -> library.v1.CreateChapterRequest
-	16, // 28: library.v1.LibraryService.GetChapter:input_type -> library.v1.GetChapterRequest
-	17, // 29: library.v1.LibraryService.UpdateChapter:input_type -> library.v1.UpdateChapterRequest
-	18, // 30: library.v1.LibraryService.DeleteChapter:input_type -> library.v1.DeleteChapterRequest
-	19, // 31: library.v1.LibraryService.ReorderChapters:input_type -> library.v1.ReorderChaptersRequest
-	22, // 32: library.v1.LibraryService.CreateSaga:input_type -> library.v1.CreateSagaRequest
-	23, // 33: library.v1.LibraryService.ListSagas:input_type -> library.v1.ListSagasRequest
-	24, // 34: library.v1.LibraryService.ListMySagas:input_type -> library.v1.ListMySagasRequest
-	26, // 35: library.v1.LibraryService.GetSaga:input_type -> library.v1.GetSagaRequest
-	27, // 36: library.v1.LibraryService.UpdateSaga:input_type -> library.v1.UpdateSagaRequest
-	28, // 37: library.v1.LibraryService.DeleteSaga:input_type -> library.v1.DeleteSagaRequest
-	31, // 38: library.v1.LibraryService.AddBookToSaga:input_type -> library.v1.AddBookToSagaRequest
-	32, // 39: library.v1.LibraryService.RemoveBookFromSaga:input_type -> library.v1.RemoveBookFromSagaRequest
-	33, // 40: library.v1.LibraryService.ReorderSagaBooks:input_type -> library.v1.ReorderSagaBooksRequest
-	34, // 41: library.v1.LibraryService.SaveBook:input_type -> library.v1.SaveBookRequest
-	35, // 42: library.v1.LibraryService.ListSavedBooks:input_type -> library.v1.ListSavedBooksRequest
-	37, // 43: library.v1.LibraryService.UnsaveBook:input_type -> library.v1.UnsaveBookRequest
-	10, // 44: library.v1.LibraryService.CreateBook:output_type -> library.v1.BookResponse
-	8,  // 45: library.v1.LibraryService.ListBooks:output_type -> library.v1.ListBooksResponse
-	8,  // 46: library.v1.LibraryService.ListMyBooks:output_type -> library.v1.ListBooksResponse
-	11, // 47: library.v1.LibraryService.GetBook:output_type -> library.v1.BookDetailResponse
-	10, // 48: library.v1.LibraryService.UpdateBook:output_type -> library.v1.BookResponse
-	14, // 49: library.v1.LibraryService.DeleteBook:output_type -> library.v1.DeleteResponse
-	21, // 50: library.v1.LibraryService.CreateChapter:output_type -> library.v1.ChapterResponse
-	21, // 51: library.v1.LibraryService.GetChapter:output_type -> library.v1.ChapterResponse
-	21, // 52: library.v1.LibraryService.UpdateChapter:output_type -> library.v1.ChapterResponse
-	14, // 53: library.v1.LibraryService.DeleteChapter:output_type -> library.v1.DeleteResponse
-	20, // 54: library.v1.LibraryService.ReorderChapters:output_type -> library.v1.ReorderChaptersResponse
-	29, // 55: library.v1.LibraryService.CreateSaga:output_type -> library.v1.SagaResponse
-	25, // 56: library.v1.LibraryService.ListSagas:output_type -> library.v1.ListSagasResponse
-	25, // 57: library.v1.LibraryService.ListMySagas:output_type -> library.v1.ListSagasResponse
-	30, // 58: library.v1.LibraryService.GetSaga:output_type -> library.v1.SagaDetailResponse
-	29, // 59: library.v1.LibraryService.UpdateSaga:output_type -> library.v1.SagaResponse
-	14, // 60: library.v1.LibraryService.DeleteSaga:output_type -> library.v1.DeleteResponse
-	30, // 61: library.v1.LibraryService.AddBookToSaga:output_type -> library.v1.SagaDetailResponse
-	14, // 62: library.v1.LibraryService.RemoveBookFromSaga:output_type -> library.v1.DeleteResponse
-	30, // 63: library.v1.LibraryService.ReorderSagaBooks:output_type -> library.v1.SagaDetailResponse
-	38, // 64: library.v1.LibraryService.SaveBook:output_type -> library.v1.SavedBookResponse
-	36, // 65: library.v1.LibraryService.ListSavedBooks:output_type -> library.v1.ListSavedBooksResponse
-	14, // 66: library.v1.LibraryService.UnsaveBook:output_type -> library.v1.DeleteResponse
-	44, // [44:67] is the sub-list for method output_type
-	21, // [21:44] is the sub-list for method input_type
-	21, // [21:21] is the sub-list for extension type_name
-	21, // [21:21] is the sub-list for extension extendee
-	0,  // [0:21] is the sub-list for field type_name
+	0,  // 8: library.v1.ListBooksResponse.books:type_name -> library.v1.Book
+	0,  // 9: library.v1.BookResponse.book:type_name -> library.v1.Book
+	0,  // 10: library.v1.BookDetailResponse.book:type_name -> library.v1.Book
+	1,  // 11: library.v1.BookDetailResponse.chapters:type_name -> library.v1.Chapter
+	1,  // 12: library.v1.ReorderChaptersResponse.chapters:type_name -> library.v1.Chapter
+	1,  // 13: library.v1.ChapterResponse.chapter:type_name -> library.v1.Chapter
+	2,  // 14: library.v1.ListSagasResponse.sagas:type_name -> library.v1.Saga
+	2,  // 15: library.v1.SagaResponse.saga:type_name -> library.v1.Saga
+	2,  // 16: library.v1.SagaDetailResponse.saga:type_name -> library.v1.Saga
+	0,  // 17: library.v1.SagaDetailResponse.books:type_name -> library.v1.Book
+	3,  // 18: library.v1.ListSavedBooksResponse.saved_books:type_name -> library.v1.SavedBook
+	3,  // 19: library.v1.SavedBookResponse.saved_book:type_name -> library.v1.SavedBook
+	4,  // 20: library.v1.LibraryService.CreateBook:input_type -> library.v1.CreateBookRequest
+	5,  // 21: library.v1.LibraryService.ListBooks:input_type -> library.v1.ListBooksRequest
+	6,  // 22: library.v1.LibraryService.ListMyBooks:input_type -> library.v1.ListMyBooksRequest
+	8,  // 23: library.v1.LibraryService.GetBook:input_type -> library.v1.GetBookRequest
+	11, // 24: library.v1.LibraryService.UpdateBook:input_type -> library.v1.UpdateBookRequest
+	12, // 25: library.v1.LibraryService.DeleteBook:input_type -> library.v1.DeleteBookRequest
+	14, // 26: library.v1.LibraryService.CreateChapter:input_type -> library.v1.CreateChapterRequest
+	15, // 27: library.v1.LibraryService.GetChapter:input_type -> library.v1.GetChapterRequest
+	16, // 28: library.v1.LibraryService.UpdateChapter:input_type -> library.v1.UpdateChapterRequest
+	17, // 29: library.v1.LibraryService.DeleteChapter:input_type -> library.v1.DeleteChapterRequest
+	18, // 30: library.v1.LibraryService.ReorderChapters:input_type -> library.v1.ReorderChaptersRequest
+	21, // 31: library.v1.LibraryService.CreateSaga:input_type -> library.v1.CreateSagaRequest
+	22, // 32: library.v1.LibraryService.ListSagas:input_type -> library.v1.ListSagasRequest
+	23, // 33: library.v1.LibraryService.ListMySagas:input_type -> library.v1.ListMySagasRequest
+	25, // 34: library.v1.LibraryService.GetSaga:input_type -> library.v1.GetSagaRequest
+	26, // 35: library.v1.LibraryService.UpdateSaga:input_type -> library.v1.UpdateSagaRequest
+	27, // 36: library.v1.LibraryService.DeleteSaga:input_type -> library.v1.DeleteSagaRequest
+	30, // 37: library.v1.LibraryService.AddBookToSaga:input_type -> library.v1.AddBookToSagaRequest
+	31, // 38: library.v1.LibraryService.RemoveBookFromSaga:input_type -> library.v1.RemoveBookFromSagaRequest
+	32, // 39: library.v1.LibraryService.ReorderSagaBooks:input_type -> library.v1.ReorderSagaBooksRequest
+	33, // 40: library.v1.LibraryService.SaveBook:input_type -> library.v1.SaveBookRequest
+	34, // 41: library.v1.LibraryService.ListSavedBooks:input_type -> library.v1.ListSavedBooksRequest
+	36, // 42: library.v1.LibraryService.UnsaveBook:input_type -> library.v1.UnsaveBookRequest
+	38, // 43: library.v1.LibraryService.DeleteAuthorContent:input_type -> library.v1.DeleteAuthorContentRequest
+	9,  // 44: library.v1.LibraryService.CreateBook:output_type -> library.v1.BookResponse
+	7,  // 45: library.v1.LibraryService.ListBooks:output_type -> library.v1.ListBooksResponse
+	7,  // 46: library.v1.LibraryService.ListMyBooks:output_type -> library.v1.ListBooksResponse
+	10, // 47: library.v1.LibraryService.GetBook:output_type -> library.v1.BookDetailResponse
+	9,  // 48: library.v1.LibraryService.UpdateBook:output_type -> library.v1.BookResponse
+	13, // 49: library.v1.LibraryService.DeleteBook:output_type -> library.v1.DeleteResponse
+	20, // 50: library.v1.LibraryService.CreateChapter:output_type -> library.v1.ChapterResponse
+	20, // 51: library.v1.LibraryService.GetChapter:output_type -> library.v1.ChapterResponse
+	20, // 52: library.v1.LibraryService.UpdateChapter:output_type -> library.v1.ChapterResponse
+	13, // 53: library.v1.LibraryService.DeleteChapter:output_type -> library.v1.DeleteResponse
+	19, // 54: library.v1.LibraryService.ReorderChapters:output_type -> library.v1.ReorderChaptersResponse
+	28, // 55: library.v1.LibraryService.CreateSaga:output_type -> library.v1.SagaResponse
+	24, // 56: library.v1.LibraryService.ListSagas:output_type -> library.v1.ListSagasResponse
+	24, // 57: library.v1.LibraryService.ListMySagas:output_type -> library.v1.ListSagasResponse
+	29, // 58: library.v1.LibraryService.GetSaga:output_type -> library.v1.SagaDetailResponse
+	28, // 59: library.v1.LibraryService.UpdateSaga:output_type -> library.v1.SagaResponse
+	13, // 60: library.v1.LibraryService.DeleteSaga:output_type -> library.v1.DeleteResponse
+	29, // 61: library.v1.LibraryService.AddBookToSaga:output_type -> library.v1.SagaDetailResponse
+	13, // 62: library.v1.LibraryService.RemoveBookFromSaga:output_type -> library.v1.DeleteResponse
+	29, // 63: library.v1.LibraryService.ReorderSagaBooks:output_type -> library.v1.SagaDetailResponse
+	37, // 64: library.v1.LibraryService.SaveBook:output_type -> library.v1.SavedBookResponse
+	35, // 65: library.v1.LibraryService.ListSavedBooks:output_type -> library.v1.ListSavedBooksResponse
+	13, // 66: library.v1.LibraryService.UnsaveBook:output_type -> library.v1.DeleteResponse
+	39, // 67: library.v1.LibraryService.DeleteAuthorContent:output_type -> library.v1.DeleteAuthorContentResponse
+	44, // [44:68] is the sub-list for method output_type
+	20, // [20:44] is the sub-list for method input_type
+	20, // [20:20] is the sub-list for extension type_name
+	20, // [20:20] is the sub-list for extension extendee
+	0,  // [0:20] is the sub-list for field type_name
 }
 
 func init() { file_library_v1_library_proto_init() }
@@ -2700,16 +2764,16 @@ func file_library_v1_library_proto_init() {
 	if File_library_v1_library_proto != nil {
 		return
 	}
-	file_library_v1_library_proto_msgTypes[12].OneofWrappers = []any{}
-	file_library_v1_library_proto_msgTypes[17].OneofWrappers = []any{}
-	file_library_v1_library_proto_msgTypes[27].OneofWrappers = []any{}
+	file_library_v1_library_proto_msgTypes[11].OneofWrappers = []any{}
+	file_library_v1_library_proto_msgTypes[16].OneofWrappers = []any{}
+	file_library_v1_library_proto_msgTypes[26].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_library_v1_library_proto_rawDesc), len(file_library_v1_library_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   39,
+			NumMessages:   40,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -23,6 +23,10 @@ type Book struct {
 	Status      string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
+	// ChapterCount son los capitulos visibles para quien pidio el libro: todos
+	// si es el autor, solo los publicados si es cualquier otro. Lo calcula la
+	// consulta, no se guarda en books.
+	ChapterCount int32
 }
 
 // BookUpdate describe una modificacion parcial: los campos en nil se dejan
@@ -76,6 +80,10 @@ type BookFilter struct {
 	AuthorID string
 	Status   string
 	Search   string
+	// ViewerID es quien pide el listado, vacio si no vino token. No filtra
+	// nada: decide de que libros se cuentan tambien los capitulos en borrador
+	// (los suyos).
+	ViewerID string
 }
 
 // SagaFilter son los filtros del listado de sagas. Las sagas no tienen estado,

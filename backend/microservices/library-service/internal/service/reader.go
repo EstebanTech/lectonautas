@@ -3,8 +3,8 @@ package service
 import (
 	"context"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/domain"
-	libraryv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
+	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
 )
 
 // El modulo reader siempre opera sobre la biblioteca del llamante: el user_id
@@ -101,6 +101,33 @@ func (s *LibraryService) UnsaveBook(ctx context.Context, req *libraryv1.UnsaveBo
 	s.invalidate(ctx)
 
 	return &libraryv1.DeleteResponse{Success: true}, nil
+}
+
+// DeleteAuthorContent borra todo lo que cuelga de un usuario que se da de baja.
+//
+// No pide token ni comprueba propiedad, a diferencia de todo lo demas en este
+// servicio: quien llama es user-service, que ya autentico al dueno de la cuenta
+// antes de decidir la baja. Lo que impide que lo llame cualquiera es que no
+// existe como endpoint REST y que el gateway corta la ruta gRPC (envoy.yaml),
+// igual que con ValidateSession del lado de user-service.
+func (s *LibraryService) DeleteAuthorContent(ctx context.Context, req *libraryv1.DeleteAuthorContentRequest) (*libraryv1.DeleteAuthorContentResponse, error) {
+	userID, err := requiredID("user_id", req.GetUserId())
+	if err != nil {
+		return nil, err
+	}
+
+	books, sagas, saved, err := s.books.DeleteByAuthor(ctx, userID)
+	if err != nil {
+		return nil, mapRepoErr(err, "failed to delete author content")
+	}
+
+	s.invalidate(ctx)
+
+	return &libraryv1.DeleteAuthorContentResponse{
+		BooksDeleted:      books,
+		SagasDeleted:      sagas,
+		SavedBooksDeleted: saved,
+	}, nil
 }
 
 func savedBooksResponse(saved []*domain.SavedBook) *libraryv1.ListSavedBooksResponse {

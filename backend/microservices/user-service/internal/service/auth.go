@@ -12,11 +12,11 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/cache"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/domain"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/repository"
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/internal/token"
-	userv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/user-service/proto/user/v1"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/cache"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/domain"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/repository"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/token"
+	userv1 "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/user/v1"
 )
 
 const (

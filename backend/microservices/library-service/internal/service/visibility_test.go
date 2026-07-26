@@ -7,8 +7,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/internal/domain"
-	libraryv1 "github.com/estebandeveloper20/lectonautas/backend/microservices/library-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
+	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
 )
 
 // Estas pruebas cubren las reglas que hacen que un borrador no se filtre y que
@@ -82,6 +82,64 @@ func TestGetBook_ElAutorVeSusCapitulosEnBorrador(t *testing.T) {
 	}
 	if len(resp.GetChapters()) != 2 {
 		t.Fatalf("el autor deberia ver sus 2 capitulos, vio %d", len(resp.GetChapters()))
+	}
+}
+
+// El escenario tiene un capitulo publicado y uno en borrador: chapter_count
+// tiene que cuadrar con los capitulos que cada uno puede abrir, o el numero
+// delataria obra inedita.
+func TestChapterCount_SigueLaMismaVisibilidadQueLosCapitulos(t *testing.T) {
+	tests := []struct {
+		nombre string
+		auth   fakeAuth
+		quiere int32
+	}{
+		{"el autor cuenta tambien sus borradores", asAuthor(), 2},
+		{"un lector ajeno solo cuenta los publicados", asIntruder(), 1},
+		{"un anonimo, igual que el lector ajeno", anonymous(), 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.nombre, func(t *testing.T) {
+			svc, _ := newTestService(tt.auth)
+
+			resp, err := svc.GetBook(context.Background(), &libraryv1.GetBookRequest{Id: bookID})
+			if err != nil {
+				t.Fatalf("error inesperado: %v", err)
+			}
+
+			if got := resp.GetBook().GetChapterCount(); got != tt.quiere {
+				t.Fatalf("chapter_count = %d, se esperaba %d", got, tt.quiere)
+			}
+			// El numero no puede contradecir a la lista que viaja al lado.
+			if got := int32(len(resp.GetChapters())); got != resp.GetBook().GetChapterCount() {
+				t.Fatalf("chapter_count = %d pero llegaron %d capitulos",
+					resp.GetBook().GetChapterCount(), got)
+			}
+		})
+	}
+}
+
+// El listado publico da el numero publico incluso al autor: es la vista de
+// afuera. La suya, con borradores, esta en ListMyBooks.
+func TestChapterCount_ListadoPublicoVsElDelAutor(t *testing.T) {
+	svc, _ := newTestService(asAuthor())
+	ctx := context.Background()
+
+	publico, err := svc.ListBooks(ctx, &libraryv1.ListBooksRequest{})
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if len(publico.GetBooks()) != 1 || publico.GetBooks()[0].GetChapterCount() != 1 {
+		t.Fatalf("en el listado publico se esperaba un libro con chapter_count 1")
+	}
+
+	propio, err := svc.ListMyBooks(ctx, &libraryv1.ListMyBooksRequest{})
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if len(propio.GetBooks()) != 1 || propio.GetBooks()[0].GetChapterCount() != 2 {
+		t.Fatalf("en su propio listado el autor deberia ver chapter_count 2")
 	}
 }
 
