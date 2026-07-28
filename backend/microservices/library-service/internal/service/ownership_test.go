@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"google.golang.org/grpc/codes"
@@ -320,51 +321,196 @@ func TestEscrituras_InvalidanElCache(t *testing.T) {
 	}
 }
 
-func TestSaveBook_ValidaKindYExigeToken(t *testing.T) {
-	t.Run("kind invalido", func(t *testing.T) {
-		svc, _ := newTestService(asAuthor())
-		_, err := svc.SaveBook(context.Background(), &libraryv1.SaveBookRequest{
-			BookId: bookID, Kind: "inventado",
-		})
-		requireCode(t, err, codes.InvalidArgument)
-	})
+// Los me gusta, comentarios y calificaciones de un libro viven en otra base:
+// ningun CASCADE los alcanza, hay que pedirselo a interaction-service.
+func TestDeleteBook_LimpiaSusInteracciones(t *testing.T) {
+	svc, _ := newTestService(asAuthor())
+	inter := svc.interactions.(*fakeInteractions)
 
+	if _, err := svc.DeleteBook(context.Background(), &libraryv1.DeleteBookRequest{Id: bookID}); err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+
+	if len(inter.cleaned) != 1 || inter.cleaned[0] != bookID {
+		t.Fatalf("limpiados = %v, se esperaba solo %s", inter.cleaned, bookID)
+	}
+}
+
+// Y en la baja de cuenta, la de todos sus libros.
+func TestDeleteAuthorContent_LimpiaLasInteraccionesDeSusLibros(t *testing.T) {
+	svc, _ := newTestService(asAuthor())
+	inter := svc.interactions.(*fakeInteractions)
+	borrador := draftBook(svc)
+
+	if _, err := svc.DeleteAuthorContent(context.Background(),
+		&libraryv1.DeleteAuthorContentRequest{UserId: authorID}); err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+
+	if len(inter.cleaned) != 2 {
+		t.Fatalf("limpiados = %v, se esperaban los 2 libros del autor", inter.cleaned)
+	}
+	// Los ids se leen ANTES de borrar: despues no habria de donde sacarlos.
+	for _, id := range []string{bookID, borrador} {
+		encontrado := false
+		for _, c := range inter.cleaned {
+			if c == id {
+				encontrado = true
+			}
+		}
+		if !encontrado {
+			t.Fatalf("no se pidio limpiar el libro %s", id)
+		}
+	}
+}
+
+// El borrado ya ocurrio y no tiene vuelta atras: que la limpieza falle deja
+// filas huerfanas (invisibles, no hay libro que abrir) pero no puede convertir
+// en error una operacion que ya se completo.
+func TestDeleteBook_SigueSiendoExitosoSiLaLimpiezaFalla(t *testing.T) {
+	svc, _ := newTestService(asAuthor())
+	svc.interactions.(*fakeInteractions).err = errors.New("interaction-service caido")
+
+	resp, err := svc.DeleteBook(context.Background(), &libraryv1.DeleteBookRequest{Id: bookID})
+	if err != nil {
+		t.Fatalf("el borrado no deberia fallar por la limpieza: %v", err)
+	}
+	if !resp.GetSuccess() {
+		t.Fatal("se esperaba success")
+	}
+}
+
+func TestSetBookGenres_SoloElAutor(t *testing.T) {
 	t.Run("sin token", func(t *testing.T) {
 		svc, _ := newTestService(anonymous())
-		_, err := svc.SaveBook(context.Background(), &libraryv1.SaveBookRequest{
-			BookId: bookID, Kind: domain.SavedKindFavorite,
+		_, err := svc.SetBookGenres(context.Background(), &libraryv1.SetBookGenresRequest{
+			BookId: bookID, Genres: []string{"fantasy"},
 		})
 		requireCode(t, err, codes.Unauthenticated)
 	})
 
-	t.Run("no se puede guardar un borrador ajeno", func(t *testing.T) {
+	t.Run("un tercero no le pone generos a un libro ajeno", func(t *testing.T) {
 		svc, _ := newTestService(asIntruder())
-		id := draftBook(svc)
-		_, err := svc.SaveBook(context.Background(), &libraryv1.SaveBookRequest{
-			BookId: id, Kind: domain.SavedKindFavorite,
+		_, err := svc.SetBookGenres(context.Background(), &libraryv1.SetBookGenresRequest{
+			BookId: bookID, Genres: []string{"fantasy"},
 		})
-		requireCode(t, err, codes.NotFound)
+		requireCode(t, err, codes.PermissionDenied)
+	})
+
+	t.Run("el autor si", func(t *testing.T) {
+		svc, c := newTestService(asAuthor())
+		resp, err := svc.SetBookGenres(context.Background(), &libraryv1.SetBookGenresRequest{
+			BookId: bookID, Genres: []string{"fantasy", "horror"},
+		})
+		if err != nil {
+			t.Fatalf("error inesperado: %v", err)
+		}
+		if got := len(resp.GetBook().GetGenres()); got != 2 {
+			t.Fatalf("generos = %d, se esperaban 2", got)
+		}
+		// Los generos salen en el libro, que va cacheado: sin bump, los GET
+		// seguirian devolviendo los de antes.
+		if c.bumps != 1 {
+			t.Fatalf("invalidaciones = %d, se esperaba 1", c.bumps)
+		}
 	})
 }
 
-func TestListSavedBooks_SoloLaBibliotecaPropia(t *testing.T) {
+// El reemplazo es total, no incremental: es la diferencia entre este endpoint y
+// un PATCH, y lo que permite dejar un libro sin generos.
+func TestSetBookGenres_ReemplazaLaListaEntera(t *testing.T) {
 	svc, _ := newTestService(asAuthor())
 	ctx := context.Background()
 
-	if _, err := svc.SaveBook(ctx, &libraryv1.SaveBookRequest{
-		BookId: bookID, Kind: domain.SavedKindFavorite,
+	if _, err := svc.SetBookGenres(ctx, &libraryv1.SetBookGenresRequest{
+		BookId: bookID, Genres: []string{"fantasy", "horror"},
 	}); err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
 
-	// El mismo servicio, pero con otro llamante: no debe ver nada.
-	svc.auth = asIntruder()
-	resp, err := svc.ListSavedBooks(ctx, &libraryv1.ListSavedBooksRequest{})
+	resp, err := svc.SetBookGenres(ctx, &libraryv1.SetBookGenresRequest{
+		BookId: bookID, Genres: []string{"drama"},
+	})
 	if err != nil {
 		t.Fatalf("error inesperado: %v", err)
 	}
-	if resp.GetTotal() != 0 {
-		t.Fatalf("el intruso vio %d entradas de la biblioteca ajena", resp.GetTotal())
+	generos := resp.GetBook().GetGenres()
+	if len(generos) != 1 || generos[0].GetSlug() != "drama" {
+		t.Fatalf("generos = %v, se esperaba solo drama", generos)
+	}
+
+	vacio, err := svc.SetBookGenres(ctx, &libraryv1.SetBookGenresRequest{BookId: bookID})
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if got := len(vacio.GetBook().GetGenres()); got != 0 {
+		t.Fatalf("generos = %d, se esperaba que la lista vacia los quitara todos", got)
+	}
+}
+
+func TestGeneros_RechazanListasInvalidas(t *testing.T) {
+	// Cinco generos validos, uno mas que el tope.
+	deMas := []string{"fantasy", "horror", "romance", "drama", "comedy"}
+
+	casos := []struct {
+		nombre  string
+		generos []string
+	}{
+		{"mas de cuatro", deMas},
+		{"repetidos", []string{"fantasy", "fantasy"}},
+		{"vacio en la lista", []string{"fantasy", "   "}},
+		{"fuera del catalogo", []string{"inventado"}},
+	}
+
+	for _, tt := range casos {
+		// Vale igual al crear el libro que al cambiarle los generos despues: las
+		// dos puertas de escritura tienen que aplicar la misma regla.
+		t.Run("CreateBook/"+tt.nombre, func(t *testing.T) {
+			svc, _ := newTestService(asAuthor())
+			_, err := svc.CreateBook(context.Background(), &libraryv1.CreateBookRequest{
+				Title: "Libro", Genres: tt.generos,
+			})
+			requireCode(t, err, codes.InvalidArgument)
+		})
+
+		t.Run("SetBookGenres/"+tt.nombre, func(t *testing.T) {
+			svc, _ := newTestService(asAuthor())
+			_, err := svc.SetBookGenres(context.Background(), &libraryv1.SetBookGenresRequest{
+				BookId: bookID, Genres: tt.generos,
+			})
+			requireCode(t, err, codes.InvalidArgument)
+		})
+	}
+}
+
+// Cuatro es el maximo, no un valor prohibido.
+func TestCreateBook_AceptaElMaximoDeGeneros(t *testing.T) {
+	svc, _ := newTestService(asAuthor())
+
+	resp, err := svc.CreateBook(context.Background(), &libraryv1.CreateBookRequest{
+		Title:  "Libro",
+		Genres: []string{"fantasy", "horror", "romance", "drama"},
+	})
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if got := len(resp.GetBook().GetGenres()); got != domain.GenreMaxPerBook {
+		t.Fatalf("generos = %d, se esperaban %d", got, domain.GenreMaxPerBook)
+	}
+}
+
+func TestListGenres_DevuelveElCatalogoSinToken(t *testing.T) {
+	svc, _ := newTestService(anonymous())
+
+	resp, err := svc.ListGenres(context.Background(), &libraryv1.ListGenresRequest{})
+	if err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+	if resp.GetTotal() != int32(len(catalogo)) {
+		t.Fatalf("total = %d, se esperaban %d", resp.GetTotal(), len(catalogo))
+	}
+	if resp.GetGenres()[0].GetName() == "" {
+		t.Fatal("el catalogo tiene que traer el nombre, no solo el slug")
 	}
 }
 

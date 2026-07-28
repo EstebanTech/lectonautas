@@ -16,6 +16,11 @@ type SessionRepository interface {
 	Create(ctx context.Context, s *domain.Session) error
 	GetValidByTokenHash(ctx context.Context, tokenHash string) (*domain.Session, error)
 	Revoke(ctx context.Context, tokenHash string) error
+	// TokenHashesByUser devuelve los hashes de las sesiones vigentes del
+	// usuario. Lo usa la baja de cuenta para poder tirar tambien las entradas
+	// que esas sesiones tengan en Valkey: borrar la fila no alcanza, porque el
+	// cache se consulta antes que la BD.
+	TokenHashesByUser(ctx context.Context, userID string) ([]string, error)
 }
 
 type PostgresSessionRepository struct {
@@ -57,6 +62,31 @@ func (r *PostgresSessionRepository) GetValidByTokenHash(ctx context.Context, tok
 		return nil, err
 	}
 	return s, nil
+}
+
+// TokenHashesByUser lista las sesiones que todavia podrian resolverse: las no
+// revocadas y sin vencer. Las demas ya no abren nada, ni desde el cache, porque
+// la entrada de Valkey nunca vive mas que el expires_at de su sesion.
+func (r *PostgresSessionRepository) TokenHashesByUser(ctx context.Context, userID string) ([]string, error) {
+	const query = `
+		SELECT token FROM session
+		WHERE user_id = $1 AND revoked_at IS NULL AND expires_at > now()`
+
+	rows, err := r.pool.Query(ctx, query, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	hashes := make([]string, 0)
+	for rows.Next() {
+		var hash string
+		if err := rows.Scan(&hash); err != nil {
+			return nil, err
+		}
+		hashes = append(hashes, hash)
+	}
+	return hashes, rows.Err()
 }
 
 // Revoke marca la sesion como revocada (logout). No borra la fila para dejar

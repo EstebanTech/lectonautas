@@ -41,7 +41,7 @@ func (a *Authenticator) Close() error {
 }
 
 // Require exige un token valido y devuelve el user_id del llamante. Es lo que
-// usan todas las escrituras y todo el modulo reader.
+// usan todas las escrituras y los listados de lo propio.
 func (a *Authenticator) Require(ctx context.Context) (string, error) {
 	raw, err := bearerToken(ctx)
 	if err != nil {

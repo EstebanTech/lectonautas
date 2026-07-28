@@ -13,6 +13,7 @@ import (
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/config"
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/content"
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/database"
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/interaction"
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/repository"
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/server"
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/service"
@@ -56,9 +57,16 @@ func main() {
 	}
 	defer contentClient.Close()
 
+	// Igual de perezosa, y por el mismo motivo: solo se usa al dar de baja.
+	interactionClient, err := interaction.New(cfg.InteractionAddr)
+	if err != nil {
+		log.Fatalf("failed to create interaction-service client (%s): %v", cfg.InteractionAddr, err)
+	}
+	defer interactionClient.Close()
+
 	userRepo := repository.NewPostgresUserRepository(pool)
 	sessionRepo := repository.NewPostgresSessionRepository(pool)
-	userService := service.NewUserService(userRepo, sessionRepo, sessionCache, userCache, contentClient)
+	userService := service.NewUserService(userRepo, sessionRepo, sessionCache, userCache, contentClient, interactionClient)
 	grpcServer := server.NewGRPCServer(userService)
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)

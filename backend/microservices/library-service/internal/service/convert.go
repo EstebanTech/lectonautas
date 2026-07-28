@@ -1,6 +1,8 @@
 package service
 
 import (
+	"time"
+
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
@@ -14,6 +16,16 @@ func derefString(v *string) string {
 		return ""
 	}
 	return *v
+}
+
+// Un Timestamp si distingue el nil, porque es un mensaje y no un escalar: una
+// fecha ausente sale del JSON en vez de imprimirse como el epoch, que es lo que
+// pasaria con un cero. Asi "nunca se publico" se lee tal cual.
+func timestampOrNil(v *time.Time) *timestamppb.Timestamp {
+	if v == nil {
+		return nil
+	}
+	return timestamppb.New(*v)
 }
 
 func bookToProto(b *domain.Book) *libraryv1.Book {
@@ -30,7 +42,24 @@ func bookToProto(b *domain.Book) *libraryv1.Book {
 		CreatedAt:    timestamppb.New(b.CreatedAt),
 		UpdatedAt:    timestamppb.New(b.UpdatedAt),
 		ChapterCount: b.ChapterCount,
+		PublishedAt:  timestampOrNil(b.PublishedAt),
+		Genres:       genresToProto(b.Genres),
 	}
+}
+
+func genreToProto(g *domain.Genre) *libraryv1.Genre {
+	if g == nil {
+		return nil
+	}
+	return &libraryv1.Genre{Slug: g.Slug, Name: g.Name}
+}
+
+func genresToProto(genres []*domain.Genre) []*libraryv1.Genre {
+	out := make([]*libraryv1.Genre, 0, len(genres))
+	for _, g := range genres {
+		out = append(out, genreToProto(g))
+	}
+	return out
 }
 
 func booksToProto(books []*domain.Book) []*libraryv1.Book {
@@ -46,14 +75,15 @@ func chapterToProto(ch *domain.Chapter) *libraryv1.Chapter {
 		return nil
 	}
 	return &libraryv1.Chapter{
-		Id:        ch.ID,
-		BookId:    ch.BookID,
-		Title:     ch.Title,
-		Content:   derefString(ch.Content),
-		Position:  ch.Position,
-		Status:    ch.Status,
-		CreatedAt: timestamppb.New(ch.CreatedAt),
-		UpdatedAt: timestamppb.New(ch.UpdatedAt),
+		Id:          ch.ID,
+		BookId:      ch.BookID,
+		Title:       ch.Title,
+		Content:     derefString(ch.Content),
+		Position:    ch.Position,
+		Status:      ch.Status,
+		CreatedAt:   timestamppb.New(ch.CreatedAt),
+		UpdatedAt:   timestamppb.New(ch.UpdatedAt),
+		PublishedAt: timestampOrNil(ch.PublishedAt),
 	}
 }
 
@@ -85,17 +115,4 @@ func sagasToProto(sagas []*domain.Saga) []*libraryv1.Saga {
 		out = append(out, sagaToProto(sg))
 	}
 	return out
-}
-
-func savedBookToProto(sb *domain.SavedBook) *libraryv1.SavedBook {
-	if sb == nil {
-		return nil
-	}
-	return &libraryv1.SavedBook{
-		Id:        sb.ID,
-		UserId:    sb.UserID,
-		Kind:      sb.Kind,
-		CreatedAt: timestamppb.New(sb.CreatedAt),
-		Book:      bookToProto(sb.Book),
-	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/cache"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/config"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/database"
+	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/interaction"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/repository"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/server"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/service"
@@ -58,9 +59,18 @@ func main() {
 	bookRepo := repository.NewPostgresBookRepository(pool)
 	chapterRepo := repository.NewPostgresChapterRepository(pool)
 	sagaRepo := repository.NewPostgresSagaRepository(pool)
-	savedRepo := repository.NewPostgresSavedBookRepository(pool)
+	genreRepo := repository.NewPostgresGenreRepository(pool)
 
-	libraryService := service.NewLibraryService(bookRepo, chapterRepo, sagaRepo, savedRepo, libraryCache, authenticator)
+	// Al borrar un libro hay que llevarse sus me gusta, comentarios y
+	// calificaciones, que viven en la base de interaction-service. Conexion
+	// perezosa, como las demas.
+	interactionClient, err := interaction.New(cfg.InteractionServiceAddr)
+	if err != nil {
+		log.Fatalf("failed to create interaction-service client (%s): %v", cfg.InteractionServiceAddr, err)
+	}
+	defer interactionClient.Close()
+
+	libraryService := service.NewLibraryService(bookRepo, chapterRepo, sagaRepo, genreRepo, libraryCache, authenticator, interactionClient)
 	grpcServer := server.NewGRPCServer(libraryService)
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)

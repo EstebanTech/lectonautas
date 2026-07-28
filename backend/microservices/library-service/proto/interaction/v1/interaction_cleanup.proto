@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+// Recorte del contrato de interaction-service con lo unico que este servicio le
+// llama: la limpieza de lo que deja atras algo que se borra aqui.
+//
+// El paquete, el nombre del servicio, el de los metodos y los numeros de campo
+// son los mismos que alla, que es lo que define la compatibilidad en el cable;
+// el nombre de archivo es distinto para que ambos descriptores puedan convivir.
+//
+// Mismo criterio que el resto de los stubs de cliente del monorepo: cada
+// servicio es dueno de los que usa. Si interaction.proto cambia estos metodos,
+// hay que reflejarlo aqui.
+package interaction.v1;
+
+option go_package = "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/interaction/v1;interactionv1";
+
+service InteractionService {
+  // Ninguno lleva anotacion HTTP: se llaman directo a interaction-service:50053,
+  // sin pasar por el gateway, que ademas corta estas rutas.
+  rpc DeleteUserInteractions(DeleteUserInteractionsRequest) returns (DeleteInteractionsResponse);
+  rpc DeleteBookInteractions(DeleteBookInteractionsRequest) returns (DeleteInteractionsResponse);
+}
+
+message DeleteUserInteractionsRequest {
+  string user_id = 1;
+}
+
+message DeleteBookInteractionsRequest {
+  string book_id = 1;
+}
+
+message DeleteInteractionsResponse {
+  int32 likes_deleted = 1;
+  int32 comments_deleted = 2;
+  int32 ratings_deleted = 3;
+}

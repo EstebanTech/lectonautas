@@ -12,6 +12,9 @@ type Config struct {
 	// Direccion gRPC de user-service, el unico dueno de las sesiones: este
 	// servicio le pregunta por cada token (rpc ValidateSession).
 	UserServiceAddr string
+	// Direccion gRPC de interaction-service, al que se le pide limpiar los me
+	// gusta, comentarios y calificaciones de un libro que se borra aqui.
+	InteractionServiceAddr string
 }
 
 // Load resuelve la configuración del servicio. Dentro de docker, el compose
@@ -23,6 +26,8 @@ func Load() (*Config, error) {
 		DatabaseURL:     firstNonEmpty(os.Getenv("DATABASE_URL"), os.Getenv("LIBRARY_SERVICE_DATABASE_URL")),
 		RedisAddr:       firstNonEmpty(os.Getenv("REDIS_ADDR"), os.Getenv("LIBRARY_SERVICE_REDIS_ADDR"), "localhost:6379"),
 		UserServiceAddr: firstNonEmpty(os.Getenv("USER_SERVICE_ADDR"), "localhost:50051"),
+		InteractionServiceAddr: firstNonEmpty(os.Getenv("INTERACTION_SERVICE_ADDR"),
+			"localhost:50053"),
 	}
 
 	if cfg.DatabaseURL == "" {

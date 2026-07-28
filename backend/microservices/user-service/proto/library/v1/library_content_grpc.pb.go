@@ -36,9 +36,9 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type LibraryServiceClient interface {
-	// Borra los libros, sagas y guardados de un usuario que se da de baja. No
-	// tiene anotacion HTTP a proposito: se llama directo a library-service:50052,
-	// sin pasar por el gateway.
+	// Borra los libros y las sagas de un usuario que se da de baja. No tiene
+	// anotacion HTTP a proposito: se llama directo a library-service:50052, sin
+	// pasar por el gateway.
 	DeleteAuthorContent(ctx context.Context, in *DeleteAuthorContentRequest, opts ...grpc.CallOption) (*DeleteAuthorContentResponse, error)
 }
 
@@ -64,9 +64,9 @@ func (c *libraryServiceClient) DeleteAuthorContent(ctx context.Context, in *Dele
 // All implementations must embed UnimplementedLibraryServiceServer
 // for forward compatibility.
 type LibraryServiceServer interface {
-	// Borra los libros, sagas y guardados de un usuario que se da de baja. No
-	// tiene anotacion HTTP a proposito: se llama directo a library-service:50052,
-	// sin pasar por el gateway.
+	// Borra los libros y las sagas de un usuario que se da de baja. No tiene
+	// anotacion HTTP a proposito: se llama directo a library-service:50052, sin
+	// pasar por el gateway.
 	DeleteAuthorContent(context.Context, *DeleteAuthorContentRequest) (*DeleteAuthorContentResponse, error)
 	mustEmbedUnimplementedLibraryServiceServer()
 }

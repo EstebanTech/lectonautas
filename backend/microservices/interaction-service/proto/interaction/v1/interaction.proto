@@ -1,0 +1,269 @@
+syntax = "proto3";
+
+package interaction.v1;
+
+option go_package = "github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/proto/interaction/v1;interactionv1";
+
+import "google/api/annotations.proto";
+import "google/protobuf/timestamp.proto";
+
+// InteractionService es lo que el lector hace con la obra ajena: me gusta,
+// comentarios y calificaciones. La obra en si es de library-service, que no
+// sabe nada de esto.
+//
+// Los libros y los usuarios viven en otras bases, asi que aqui sus ids son UUID
+// planos y sin foreign key. Que el libro exista y este publicado se comprueba
+// contra library-service en cada escritura, no con una FK.
+//
+// Ademas del API de peticion/respuesta, el servicio publica lo que va pasando
+// en un WebSocket que NO se describe aqui: no es gRPC y no pasa por el
+// transcoder. Vive en GET /v1/ws/books/{bookId} y esta documentado en el
+// README.
+service InteractionService {
+  // --- me gusta -------------------------------------------------------------
+
+  // Dar me gusta es idempotente: repetirlo no suma dos veces ni falla, deja el
+  // mismo estado y devuelve el conteo. Asi un doble clic o un reintento de red
+  // no obligan al cliente a distinguir "ya estaba".
+  rpc LikeBook(LikeBookRequest) returns (LikeSummaryResponse) {
+    option (google.api.http) = {
+      post: "/v1/books/{book_id}/likes"
+      body: "*"
+    };
+  }
+  // Quitarlo tambien es idempotente, por la misma razon.
+  rpc UnlikeBook(UnlikeBookRequest) returns (LikeSummaryResponse) {
+    option (google.api.http) = {
+      delete: "/v1/books/{book_id}/likes"
+    };
+  }
+  // El conteo del libro. El token es opcional: con el, la respuesta ademas dice
+  // si el que pregunta ya dio me gusta.
+  rpc GetBookLikes(GetBookLikesRequest) returns (LikeSummaryResponse) {
+    option (google.api.http) = {
+      get: "/v1/books/{book_id}/likes"
+    };
+  }
+
+  // --- comentarios ----------------------------------------------------------
+
+  rpc CreateComment(CreateCommentRequest) returns (CommentResponse) {
+    option (google.api.http) = {
+      post: "/v1/books/{book_id}/comments"
+      body: "*"
+    };
+  }
+  // Listado publico y paginado, del mas nuevo al mas viejo.
+  rpc ListComments(ListCommentsRequest) returns (ListCommentsResponse) {
+    option (google.api.http) = {
+      get: "/v1/books/{book_id}/comments"
+    };
+  }
+  // Solo el autor del comentario puede editarlo.
+  rpc UpdateComment(UpdateCommentRequest) returns (CommentResponse) {
+    option (google.api.http) = {
+      patch: "/v1/books/{book_id}/comments/{id}"
+      body: "*"
+    };
+  }
+  // Lo borra su autor. El autor del libro tambien puede, para poder moderar lo
+  // que se dice en su obra.
+  rpc DeleteComment(DeleteCommentRequest) returns (DeleteResponse) {
+    option (google.api.http) = {
+      delete: "/v1/books/{book_id}/comments/{id}"
+    };
+  }
+
+  // --- calificaciones -------------------------------------------------------
+
+  // Un lector tiene una sola calificacion por libro: volver a calificar la
+  // reemplaza, no agrega otra. Por eso es PUT y no POST.
+  rpc RateBook(RateBookRequest) returns (RatingSummaryResponse) {
+    option (google.api.http) = {
+      put: "/v1/books/{book_id}/rating"
+      body: "*"
+    };
+  }
+  // Promedio y cantidad de votos. Con token, ademas el voto propio.
+  rpc GetBookRating(GetBookRatingRequest) returns (RatingSummaryResponse) {
+    option (google.api.http) = {
+      get: "/v1/books/{book_id}/rating"
+    };
+  }
+  rpc DeleteRating(DeleteRatingRequest) returns (RatingSummaryResponse) {
+    option (google.api.http) = {
+      delete: "/v1/books/{book_id}/rating"
+    };
+  }
+
+  // --- resumen --------------------------------------------------------------
+
+  // Todo lo de un libro en una sola llamada, que es lo que necesita su ficha:
+  // pedirlo suelto serian tres viajes para pintar la misma pantalla.
+  rpc GetBookInteractions(GetBookInteractionsRequest) returns (BookInteractionsResponse) {
+    option (google.api.http) = {
+      get: "/v1/books/{book_id}/interactions"
+    };
+  }
+
+  // --- interno: limpieza ----------------------------------------------------
+
+  // DeleteUserInteractions borra todo lo que dejo un usuario que se da de baja:
+  // sus me gusta, sus comentarios y sus calificaciones. Lo llama user-service,
+  // porque el CASCADE de Postgres no cruza de una base de datos a otra.
+  //
+  // DeleteBookInteractions hace lo mismo con un libro borrado, y lo llama
+  // library-service. Sin esto quedarian comentarios colgando de un libro que ya
+  // no existe.
+  //
+  // Ninguna de las dos lleva anotacion google.api.http, asi que no existen como
+  // endpoint REST, y ademas quedan bloqueadas en envoy.yaml para que no se
+  // alcancen por la ruta de passthrough de gRPC.
+  rpc DeleteUserInteractions(DeleteUserInteractionsRequest) returns (DeleteInteractionsResponse);
+  rpc DeleteBookInteractions(DeleteBookInteractionsRequest) returns (DeleteInteractionsResponse);
+}
+
+// --- Entidades ---------------------------------------------------------------
+
+message Comment {
+  string id = 1;
+  string book_id = 2;
+  // Quien comento. Va el id y no el nombre: este servicio no es dueno de los
+  // perfiles. El cliente los resuelve contra user-service, igual que hace con
+  // el author_id de un libro.
+  string user_id = 3;
+  string body = 4;
+  google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp updated_at = 6;
+  // Editado alguna vez. Se manda calculado para que el cliente no tenga que
+  // comparar las dos fechas.
+  bool edited = 7;
+}
+
+// count es el total de me gusta del libro. liked_by_me solo tiene sentido con
+// token: sin el es siempre false.
+message LikeSummary {
+  string book_id = 1;
+  int32 count = 2;
+  bool liked_by_me = 3;
+}
+
+// average es 0 cuando todavia no hay votos, no null: en proto3 el 0 y el vacio
+// son lo mismo, y count = 0 es lo que distingue "sin votos" de "promedio bajo".
+message RatingSummary {
+  string book_id = 1;
+  double average = 2;
+  int32 count = 3;
+  // El voto del que pregunta, 0 si no voto o si no vino token.
+  int32 my_score = 4;
+}
+
+// --- Me gusta -----------------------------------------------------------------
+
+message LikeBookRequest {
+  string book_id = 1;
+}
+
+message UnlikeBookRequest {
+  string book_id = 1;
+}
+
+message GetBookLikesRequest {
+  string book_id = 1;
+}
+
+message LikeSummaryResponse {
+  LikeSummary likes = 1;
+}
+
+// --- Comentarios ---------------------------------------------------------------
+
+message CreateCommentRequest {
+  string book_id = 1;
+  string body = 2;
+}
+
+message ListCommentsRequest {
+  string book_id = 1;
+  // Paginacion 1-based. page_size por defecto 20, maximo 100. Los comentarios
+  // si se paginan: crecen con los lectores y no tienen techo.
+  int32 page = 2;
+  int32 page_size = 3;
+}
+
+message ListCommentsResponse {
+  repeated Comment comments = 1;
+  // Total de comentarios del libro, no cuantos trae esta pagina.
+  int32 total = 2;
+  int32 page = 3;
+  int32 page_size = 4;
+}
+
+message UpdateCommentRequest {
+  string book_id = 1;
+  string id = 2;
+  string body = 3;
+}
+
+message DeleteCommentRequest {
+  string book_id = 1;
+  string id = 2;
+}
+
+message CommentResponse {
+  Comment comment = 1;
+}
+
+// --- Calificaciones -------------------------------------------------------------
+
+message RateBookRequest {
+  string book_id = 1;
+  // De 1 a 5. Fuera de ese rango es InvalidArgument.
+  int32 score = 2;
+}
+
+message GetBookRatingRequest {
+  string book_id = 1;
+}
+
+message DeleteRatingRequest {
+  string book_id = 1;
+}
+
+message RatingSummaryResponse {
+  RatingSummary rating = 1;
+}
+
+// --- Resumen ----------------------------------------------------------------
+
+message GetBookInteractionsRequest {
+  string book_id = 1;
+}
+
+message BookInteractionsResponse {
+  LikeSummary likes = 1;
+  RatingSummary rating = 2;
+  int32 comment_count = 3;
+}
+
+// --- Limpieza ---------------------------------------------------------------
+
+message DeleteUserInteractionsRequest {
+  string user_id = 1;
+}
+
+message DeleteBookInteractionsRequest {
+  string book_id = 1;
+}
+
+// Los conteos son para el log de quien llama: dejan rastro de cuanto se borro
+// en una operacion que no tiene vuelta atras.
+message DeleteInteractionsResponse {
+  int32 likes_deleted = 1;
+  int32 comments_deleted = 2;
+  int32 ratings_deleted = 3;
+}
+
+message DeleteResponse {
+  bool success = 1;
+}

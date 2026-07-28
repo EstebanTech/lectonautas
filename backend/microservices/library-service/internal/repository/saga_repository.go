@@ -20,8 +20,8 @@ type SagaRepository interface {
 	Update(ctx context.Context, upd *domain.SagaUpdate) (*domain.Saga, error)
 	Delete(ctx context.Context, id string) error
 	// ListBooks devuelve los libros de la saga ordenados por su position
-	// dentro de ella. viewerID es quien pregunta, para el conteo de capitulos.
-	ListBooks(ctx context.Context, sagaID, viewerID string) ([]*domain.Book, error)
+	// dentro de ella.
+	ListBooks(ctx context.Context, sagaID string) ([]*domain.Book, error)
 	AddBook(ctx context.Context, sagaID, bookID string, position int32) error
 	RemoveBook(ctx context.Context, sagaID, bookID string) error
 	ReorderBooks(ctx context.Context, sagaID string, bookIDs []string) error
@@ -149,16 +149,17 @@ func (r *PostgresSagaRepository) Delete(ctx context.Context, id string) error {
 	return nil
 }
 
-func (r *PostgresSagaRepository) ListBooks(ctx context.Context, sagaID, viewerID string) ([]*domain.Book, error) {
+func (r *PostgresSagaRepository) ListBooks(ctx context.Context, sagaID string) ([]*domain.Book, error) {
 	query := `
-		SELECT b.id::text, b.author_id::text, b.title, b.description, b.cover_url, b.status, b.created_at, b.updated_at,
-		       ` + chapterCountExpr("b", 2) + `
+		SELECT b.id::text, b.author_id::text, b.title, b.description, b.cover_url, b.status,
+		       b.created_at, b.updated_at, b.published_at,
+		       ` + chapterCountExpr("b") + `
 		FROM content.saga_books sb
 		JOIN content.books b ON b.id = sb.book_id
 		WHERE sb.saga_id = $1
 		ORDER BY sb.position ASC`
 
-	rows, err := r.pool.Query(ctx, query, sagaID, viewerID)
+	rows, err := r.pool.Query(ctx, query, sagaID)
 	if err != nil {
 		return nil, translateErr(err, ErrSagaNotFound)
 	}
@@ -172,7 +173,16 @@ func (r *PostgresSagaRepository) ListBooks(ctx context.Context, sagaID, viewerID
 		}
 		books = append(books, b)
 	}
-	return books, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Los libros de la saga se devuelven igual de completos que en cualquier
+	// otro listado, generos incluidos.
+	if err := attachGenres(ctx, r.pool, books); err != nil {
+		return nil, err
+	}
+	return books, nil
 }
 
 // AddBook vincula el libro a la saga. Con position 0 lo agrega al final.

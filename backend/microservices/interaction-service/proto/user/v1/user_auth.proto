@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+// Recorte del contrato de user-service con lo unico que este servicio le
+// llama: ValidateSession. El paquete y los numeros de campo son los mismos que
+// alla, que es lo que define la compatibilidad en el cable; el nombre de
+// archivo es distinto para que ambos descriptores puedan convivir.
+//
+// Se mantiene aqui, y no como import del otro modulo, porque cada servicio es
+// dueno de los stubs de cliente que usa. Si user.proto cambia ValidateSession,
+// hay que reflejarlo en este archivo.
+package user.v1;
+
+option go_package = "github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/proto/user/v1;userv1";
+
+service UserService {
+  // Resuelve un token de sesion a su user_id. No tiene anotacion HTTP a
+  // proposito: se llama directo a user-service:50051, sin pasar por el gateway.
+  rpc ValidateSession(ValidateSessionRequest) returns (ValidateSessionResponse);
+}
+
+message ValidateSessionRequest {
+  string token = 1;
+}
+
+message ValidateSessionResponse {
+  string user_id = 1;
+}

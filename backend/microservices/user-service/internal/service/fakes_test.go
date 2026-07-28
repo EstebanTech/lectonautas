@@ -130,6 +130,7 @@ type fakeSessionRepo struct {
 	createErr error
 	getErr    error
 	revokeErr error
+	hashesErr error
 
 	getCalls int
 }
@@ -154,6 +155,18 @@ func (r *fakeSessionRepo) GetValidByTokenHash(_ context.Context, hash string) (*
 }
 
 func (r *fakeSessionRepo) Revoke(context.Context, string) error { return r.revokeErr }
+
+// TokenHashesByUser devuelve la sesion vigente si es de ese usuario. Es lo que
+// la baja de cuenta necesita para poder tirar las entradas de Valkey.
+func (r *fakeSessionRepo) TokenHashesByUser(_ context.Context, userID string) ([]string, error) {
+	if r.hashesErr != nil {
+		return nil, r.hashesErr
+	}
+	if r.valid == nil || r.valid.UserID != userID {
+		return nil, nil
+	}
+	return []string{r.valid.TokenHash}, nil
+}
 
 // --- Caches -----------------------------------------------------------------
 
@@ -254,6 +267,21 @@ func (d *fakeContentDeleter) DeleteAuthorContent(_ context.Context, userID strin
 	return nil
 }
 
+// fakeInteractionDeleter es el equivalente para interaction-service: lo que el
+// usuario dejo como lector, no como autor.
+type fakeInteractionDeleter struct {
+	deleted []string
+	err     error
+}
+
+func (d *fakeInteractionDeleter) DeleteUserInteractions(_ context.Context, userID string) error {
+	if d.err != nil {
+		return d.err
+	}
+	d.deleted = append(d.deleted, userID)
+	return nil
+}
+
 // --- Armado -----------------------------------------------------------------
 
 // harness junta el servicio con sus dobles para que las pruebas puedan
@@ -265,6 +293,7 @@ type harness struct {
 	sessionCache *fakeSessionCache
 	userCache    *fakeUserCache
 	content      *fakeContentDeleter
+	interactions *fakeInteractionDeleter
 }
 
 func newHarness() *harness {
@@ -273,14 +302,16 @@ func newHarness() *harness {
 	sessionCache := newFakeSessionCache()
 	userCache := newFakeUserCache()
 	content := &fakeContentDeleter{}
+	interactions := &fakeInteractionDeleter{}
 
 	return &harness{
-		svc:          NewUserService(repo, sessions, sessionCache, userCache, content),
+		svc:          NewUserService(repo, sessions, sessionCache, userCache, content, interactions),
 		repo:         repo,
 		sessions:     sessions,
 		sessionCache: sessionCache,
 		userCache:    userCache,
 		content:      content,
+		interactions: interactions,
 	}
 }
 

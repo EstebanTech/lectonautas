@@ -77,6 +77,35 @@ services:
         condition: service_healthy
     restart: "no"
 
+  # Mismo patrón que library-migrate: crea su base si no existe y aplica sus
+  # *.up.sql en orden antes de que el servicio arranque.
+  interaction-migrate:
+    image: postgres:16-alpine
+    environment:
+      PGHOST: postgres
+      PGUSER: ${POSTGRES_USER}
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      INTERACTION_DB: ${INTERACTION_SERVICE_DB}
+    volumes:
+      - ./backend/microservices/interaction-service/migrations:/migrations:ro
+    entrypoint: ["sh", "-c"]
+    # $$ escapa la interpolacion de compose: el $ literal es para el shell.
+    command:
+      - |
+        set -e
+        if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$$INTERACTION_DB'" | grep -q 1; then
+          echo "Creando base $$INTERACTION_DB"
+          psql -d postgres -c "CREATE DATABASE \"$$INTERACTION_DB\""
+        fi
+        for f in $$(ls /migrations/*.up.sql | sort); do
+          echo "Aplicando $$f"
+          psql -d "$$INTERACTION_DB" -v ON_ERROR_STOP=1 -f "$$f"
+        done
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   user-service:
     build:
       context: ./backend/microservices/user-service
@@ -86,11 +115,15 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${USER_SERVICE_DB}?sslmode=disable
       # Valkey, compartido con el ratelimit-service, para el cache de sesiones
       REDIS_ADDR: valkey:6379
-      # Al dar de baja una cuenta hay que borrar su contenido, que vive en la
+      # Al dar de baja una cuenta hay que borrar su obra, que vive en la
       # base de library-service. No va en depends_on a propósito: la conexión
       # gRPC es perezosa y library-service ya depende de éste, así que ponerlo
       # aquí cerraría el ciclo y el compose no arrancaría.
       LIBRARY_SERVICE_ADDR: library-service:${LIBRARY_SERVICE_GRPC_PORT}
+      # Y lo mismo con lo que dejó como lector (me gusta, comentarios,
+      # calificaciones), que vive en la base de interaction-service. Tampoco va
+      # en depends_on: la conexión es perezosa y meterlo aquí cerraría el ciclo.
+      INTERACTION_SERVICE_ADDR: interaction-service:${INTERACTION_SERVICE_GRPC_PORT}
     depends_on:
       postgres:
         condition: service_healthy
@@ -106,10 +139,14 @@ services:
       GRPC_PORT: ${LIBRARY_SERVICE_GRPC_PORT}
       # Dentro de la red del compose Postgres siempre escucha en 5432
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${LIBRARY_SERVICE_DB}?sslmode=disable
-      # Valkey, para cachear las lecturas (books, sagas, biblioteca del lector)
+      # Valkey, para cachear las lecturas (books, sagas, catálogo de géneros)
       REDIS_ADDR: valkey:6379
       # No tiene la tabla de sesiones: le pregunta a user-service por cada token
       USER_SERVICE_ADDR: user-service:${USER_SERVICE_GRPC_PORT}
+      # Al borrar un libro hay que llevarse sus me gusta, comentarios y
+      # calificaciones, que viven en la base de interaction-service. Fuera de
+      # depends_on por lo mismo de siempre: la conexión gRPC es perezosa.
+      INTERACTION_SERVICE_ADDR: interaction-service:${INTERACTION_SERVICE_GRPC_PORT}
     depends_on:
       postgres:
         condition: service_healthy
@@ -118,6 +155,34 @@ services:
       library-migrate:
         condition: service_completed_successfully
       user-service:
+        condition: service_started
+
+  interaction-service:
+    build:
+      context: ./backend/microservices/interaction-service
+    environment:
+      GRPC_PORT: ${INTERACTION_SERVICE_GRPC_PORT}
+      # Puerto HTTP del WebSocket. El gateway lo enruta aparte, sin transcoder.
+      WS_PORT: ${INTERACTION_SERVICE_WS_PORT}
+      # Dentro de la red del compose Postgres siempre escucha en 5432
+      DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${INTERACTION_SERVICE_DB}?sslmode=disable
+      # Valkey hace doble trabajo aquí: cachea las lecturas y es el pub/sub que
+      # reparte los eventos entre réplicas para que el WebSocket funcione con
+      # más de una instancia.
+      REDIS_ADDR: valkey:6379
+      # No tiene la tabla de sesiones: le pregunta a user-service por cada token
+      USER_SERVICE_ADDR: user-service:${USER_SERVICE_GRPC_PORT}
+      # Ni la de libros: le pregunta a library-service si el libro existe y está
+      # publicado antes de aceptar una interacción sobre él.
+      LIBRARY_SERVICE_ADDR: library-service:${LIBRARY_SERVICE_GRPC_PORT}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      valkey:
+        condition: service_started
+      interaction-migrate:
+        condition: service_completed_successfully
+      library-service:
         condition: service_started
 
   valkey:
@@ -154,6 +219,7 @@ services:
     depends_on:
       - user-service
       - library-service
+      - interaction-service
       - ratelimit
     ports:
       - "${GATEWAY_HTTP_PORT}:8080"

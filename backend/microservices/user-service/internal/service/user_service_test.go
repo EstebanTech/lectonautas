@@ -10,6 +10,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/domain"
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/repository"
 	userv1 "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/user/v1"
 )
@@ -424,6 +425,29 @@ func TestDeleteUser_ArrastraElContenidoDelAutor(t *testing.T) {
 	if len(h.content.deleted) != 1 || h.content.deleted[0] != testUserID {
 		t.Fatalf("contenido borrado = %v, se esperaba [%s]", h.content.deleted, testUserID)
 	}
+
+	// Y lo mismo con lo que dejo como lector, que vive en una tercera base.
+	if len(h.interactions.deleted) != 1 || h.interactions.deleted[0] != testUserID {
+		t.Fatalf("interacciones borradas = %v, se esperaba [%s]", h.interactions.deleted, testUserID)
+	}
+}
+
+// Mismo criterio que con library-service: los vecinos van antes de borrar la
+// fila del usuario, y si uno falla la cuenta sigue en pie. Es la unica forma de
+// que un reintento pueda arreglarlo — sin el id ya no habria con que pedir la
+// limpieza.
+func TestDeleteUser_SiFallanLasInteraccionesNoBorraLaCuenta(t *testing.T) {
+	h := newHarness()
+	h.conUsuario(t, true)
+	h.interactions.err = errors.New("interaction-service caido")
+	ctx := h.conSesion(context.Background(), testUserID)
+
+	_, err := h.svc.DeleteUser(ctx, &userv1.DeleteUserRequest{Id: testUserID})
+
+	requireCode(t, err, codes.Internal)
+	if _, sigue := h.repo.users[testUserID]; !sigue {
+		t.Fatal("se borro la cuenta pese a que sus interacciones no se pudieron borrar")
+	}
 }
 
 // El contenido va primero justamente para esto: si library-service no responde,
@@ -467,4 +491,56 @@ func TestGetAllUsers_CacheAside(t *testing.T) {
 	if h.repo.getAllCalls != 1 {
 		t.Fatalf("consultas a la BD = %d tras el hit, se esperaba seguir en 1", h.repo.getAllCalls)
 	}
+}
+
+// Al darse de baja, los tokens de la cuenta tienen que morir con ella. No basta
+// con que el CASCADE se lleve las filas de session: resolveSession consulta
+// Valkey ANTES que la BD, asi que una entrada que sobreviva sigue resolviendo el
+// token durante toda la ventana de sessionCacheTTL. Y no solo aqui — los vecinos
+// validan sus tokens contra este servicio, asi que con uno de esos se podian
+// seguir creando libros a nombre de una cuenta que ya no existe.
+func TestDeleteUser_TiraLasSesionesCacheadas(t *testing.T) {
+	h := newHarness()
+	h.conUsuario(t, true)
+	ctx := h.conSesion(context.Background(), testUserID)
+
+	// La sesion existe tambien en la "BD", que es de donde salen los hashes.
+	hash := soloHashDeLaSesion(t, h)
+	h.sessions.valid = &domain.Session{UserID: testUserID, TokenHash: hash}
+
+	if _, err := h.svc.DeleteUser(ctx, &userv1.DeleteUserRequest{Id: testUserID}); err != nil {
+		t.Fatalf("error inesperado: %v", err)
+	}
+
+	if _, sigue := h.sessionCache.entries[hash]; sigue {
+		t.Fatal("la sesion sigue cacheada: el token de una cuenta borrada todavia resolveria")
+	}
+}
+
+// Si no se pueden leer los hashes, la baja tiene que completarse igual: es peor
+// una cuenta que no se puede borrar que unas sesiones que caducan solas.
+func TestDeleteUser_SeCompletaAunqueNoSePuedanLeerLasSesiones(t *testing.T) {
+	h := newHarness()
+	h.conUsuario(t, true)
+	ctx := h.conSesion(context.Background(), testUserID)
+	h.sessions.hashesErr = errors.New("postgres caido")
+
+	if _, err := h.svc.DeleteUser(ctx, &userv1.DeleteUserRequest{Id: testUserID}); err != nil {
+		t.Fatalf("la baja no deberia fallar por el listado de sesiones: %v", err)
+	}
+	if _, sigue := h.repo.users[testUserID]; sigue {
+		t.Fatal("la cuenta no se borro")
+	}
+}
+
+// soloHashDeLaSesion devuelve el unico hash que conSesion dejo en el cache.
+func soloHashDeLaSesion(t *testing.T, h *harness) string {
+	t.Helper()
+	if len(h.sessionCache.entries) != 1 {
+		t.Fatalf("se esperaba 1 sesion cacheada, hay %d", len(h.sessionCache.entries))
+	}
+	for hash := range h.sessionCache.entries {
+		return hash
+	}
+	return ""
 }

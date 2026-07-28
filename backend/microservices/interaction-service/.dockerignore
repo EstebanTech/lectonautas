@@ -1,0 +1,7 @@
+# Nada de esto debe entrar a la imagen: la config llega por variables de
+# entorno inyectadas por el compose.
+.env
+*.env
+bin/
+*.log
+.claude

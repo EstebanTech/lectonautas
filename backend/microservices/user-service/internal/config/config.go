@@ -12,6 +12,9 @@ type Config struct {
 	// LibraryAddr es library-service, al que se le pide borrar el contenido de
 	// una cuenta que se da de baja.
 	LibraryAddr string
+	// InteractionAddr es interaction-service, al que se le pide lo mismo con lo
+	// que esa cuenta dejo como lector: me gusta, comentarios y calificaciones.
+	InteractionAddr string
 }
 
 // Load resuelve la configuración del servicio. Dentro de docker, el compose
@@ -22,7 +25,8 @@ func Load() (*Config, error) {
 		GRPCPort:    firstNonEmpty(os.Getenv("GRPC_PORT"), os.Getenv("USER_SERVICE_GRPC_PORT"), "50051"),
 		DatabaseURL: firstNonEmpty(os.Getenv("DATABASE_URL"), os.Getenv("USER_SERVICE_DATABASE_URL")),
 		RedisAddr:   firstNonEmpty(os.Getenv("REDIS_ADDR"), os.Getenv("USER_SERVICE_REDIS_ADDR"), "localhost:6379"),
-		LibraryAddr: firstNonEmpty(os.Getenv("LIBRARY_SERVICE_ADDR"), "library-service:50052"),
+		LibraryAddr:     firstNonEmpty(os.Getenv("LIBRARY_SERVICE_ADDR"), "library-service:50052"),
+		InteractionAddr: firstNonEmpty(os.Getenv("INTERACTION_SERVICE_ADDR"), "interaction-service:50053"),
 	}
 
 	if cfg.DatabaseURL == "" {

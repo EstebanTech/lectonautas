@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+// Recorte del contrato de library-service con lo unico que este servicio le
+// llama: GetBook, para comprobar que el libro existe y esta publicado antes de
+// aceptar una interaccion sobre el.
+//
+// El paquete, el nombre del servicio, el de los metodos y los numeros de campo
+// son los mismos que alla, que es lo que define la compatibilidad en el cable;
+// el nombre de archivo es distinto para que ambos descriptores puedan convivir.
+// Los campos del libro que aqui no hacen falta (titulo, portada, fechas) se
+// omiten: proto3 los ignora al deserializar.
+//
+// Mismo criterio que el user_auth.proto: cada servicio es dueno de los stubs de
+// cliente que usa. Si library.proto cambia GetBook, hay que reflejarlo aqui.
+package library.v1;
+
+option go_package = "github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/proto/library/v1;libraryv1";
+
+service LibraryService {
+  // Sin anotacion HTTP: se llama directo a library-service:50052, no por el
+  // gateway. Sin token, que es justo lo que se quiere — asi solo resuelve los
+  // libros publicados y un borrador ajeno responde NotFound.
+  rpc GetBook(GetBookRequest) returns (BookDetailResponse);
+}
+
+message GetBookRequest {
+  string id = 1;
+}
+
+message Book {
+  string id = 1;
+  // Quien lo escribio. Se usa para dejar que el autor modere los comentarios de
+  // su propio libro.
+  string author_id = 2;
+  // El 3, 4 y 5 son titulo, descripcion y portada alla; aqui no se necesitan.
+  string status = 6;
+}
+
+message BookDetailResponse {
+  Book book = 1;
+  // El 2 son los capitulos, que a este servicio no le interesan.
+}

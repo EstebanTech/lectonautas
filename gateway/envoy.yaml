@@ -14,6 +14,12 @@ static_resources:
                 "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
                 stat_prefix: gateway
                 codec_type: AUTO
+                # Habilita el Upgrade de HTTP/1.1 a WebSocket en el listener.
+                # Sin esto, la ruta /v1/ws no puede activarlo por su cuenta y el
+                # handshake se responde como una petición normal. Qué rutas lo
+                # usan se decide abajo, ruta por ruta.
+                upgrade_configs:
+                  - upgrade_type: websocket
                 route_config:
                   name: local_route
                   virtual_hosts:
@@ -49,7 +55,8 @@ static_resources:
                             rate_limits:
                               - actions:
                                   - remote_address: {}
-                        # Libros, capítulos (anidados bajo el libro) y sagas.
+                        # Libros, con sus capítulos y sus géneros anidados bajo
+                        # el libro, y sagas.
                         - match: { prefix: "/v1/books" }
                           route:
                             cluster: library_service
@@ -62,13 +69,56 @@ static_resources:
                             rate_limits:
                               - actions:
                                   - remote_address: {}
-                        # Biblioteca del lector (favoritos / leer más tarde).
-                        - match: { prefix: "/v1/library" }
+                        # Catálogo de géneros: lista fija y pública.
+                        - match: { prefix: "/v1/genres" }
                           route:
                             cluster: library_service
                             rate_limits:
                               - actions:
                                   - remote_address: {}
+                        # WebSocket de interacciones en tiempo real. Va ANTES de
+                        # cualquier otra cosa que pudiera capturarlo y tiene tres
+                        # particularidades:
+                        #
+                        #  - Cluster propio (interaction_ws): apunta al puerto
+                        #    HTTP/1.1 del servicio, no al de gRPC. Un WebSocket
+                        #    no se puede multiplexar sobre HTTP/2 hacia gRPC.
+                        #  - upgrade_configs: sin esto Envoy trataría el
+                        #    handshake como una petición normal y lo cerraría.
+                        #  - timeout 0: la conexión está abierta por definición;
+                        #    el timeout por defecto la cortaría a los 15s.
+                        #
+                        # /v1/ws no es un método gRPC, así que con la config
+                        # global del transcoder (reject_unknown_method) éste
+                        # respondería 404 antes de que el router llegue a
+                        # enrutarlo. Se le da a la ruta su propia config con los
+                        # rechazos apagados: así el transcoder no encuentra
+                        # método, no rechaza, y deja pasar la petición tal cual
+                        # hacia el cluster de abajo.
+                        #
+                        # No sirve desactivar el filtro con el
+                        # envoy.config.route.v3.FilterConfig genérico: el
+                        # transcoder resuelve su config por ruta buscando su
+                        # propio tipo y no llega a ver ese "disabled".
+                        - match: { prefix: "/v1/ws/" }
+                          route:
+                            cluster: interaction_ws
+                            timeout: 0s
+                            upgrade_configs:
+                              - upgrade_type: websocket
+                                enabled: true
+                            rate_limits:
+                              - actions:
+                                  - remote_address: {}
+                          typed_per_filter_config:
+                            envoy.filters.http.grpc_json_transcoder:
+                              "@type": type.googleapis.com/envoy.extensions.filters.http.grpc_json_transcoder.v3.GrpcJsonTranscoder
+                              proto_descriptor: "/etc/envoy/proto/services.pb"
+                              services:
+                                - "interaction.v1.InteractionService"
+                              request_validation_options:
+                                reject_unknown_method: false
+                                reject_unknown_query_parameters: false
                         # RPCs internos de servicio a servicio: no llevan anotación
                         # HTTP, pero la ruta de passthrough de abajo aceptaría gRPC
                         # crudo desde fuera igual. Se bloquean aquí, antes de ella.
@@ -79,11 +129,25 @@ static_resources:
                             status: 404
                             body:
                               inline_string: "not found"
-                        # Borra todos los libros y sagas de un usuario. Solo la
+                        # Borra todos los libros y las sagas de un usuario. Solo la
                         # llama user-service al dar de baja una cuenta; desde
                         # fuera sería un borrado masivo sin más credencial que
                         # un user_id, que es público.
                         - match: { path: "/library.v1.LibraryService/DeleteAuthorContent" }
+                          direct_response:
+                            status: 404
+                            body:
+                              inline_string: "not found"
+                        # Borrados masivos de interacciones. Los llaman
+                        # user-service (baja de cuenta) y library-service
+                        # (borrado de libro), directo al 50053. Desde fuera
+                        # serían un borrado masivo con solo un id por credencial.
+                        - match: { path: "/interaction.v1.InteractionService/DeleteUserInteractions" }
+                          direct_response:
+                            status: 404
+                            body:
+                              inline_string: "not found"
+                        - match: { path: "/interaction.v1.InteractionService/DeleteBookInteractions" }
                           direct_response:
                             status: 404
                             body:
@@ -98,6 +162,16 @@ static_resources:
                         - match: { prefix: "/library.v1.LibraryService/" }
                           route:
                             cluster: library_service
+                            timeout: 15s
+                        # Ésta es la ruta que de verdad decide el upstream de las
+                        # interacciones: sus paths REST cuelgan de /v1/books, que
+                        # arriba resuelve a library_service, pero eso solo aplica
+                        # a CORS y rate limiting. El transcoder reescribe el path
+                        # a su forma gRPC e invalida el caché de ruta, y el
+                        # router vuelve a resolver — esta vez contra este prefijo.
+                        - match: { prefix: "/interaction.v1.InteractionService/" }
+                          route:
+                            cluster: interaction_service
                             timeout: 15s
                 http_filters:
                   - name: envoy.filters.http.cors
@@ -136,6 +210,7 @@ static_resources:
                       services:
                         - "user.v1.UserService"
                         - "library.v1.LibraryService"
+                        - "interaction.v1.InteractionService"
                       # Sin esto, el status y mensaje gRPC quedan como headers
                       # crudos (grpc-status/grpc-message) en la respuesta HTTP;
                       # con esto, el transcoder los traduce a un status HTTP real
@@ -200,6 +275,38 @@ static_resources:
               - endpoint:
                   address:
                     socket_address: { address: library-service, port_value: 50052 }
+
+    - name: interaction_service
+      connect_timeout: 2s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_extension_protocol_options:
+        envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+          "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+          explicit_http_config:
+            http2_protocol_options: {}
+      load_assignment:
+        cluster_name: interaction_service
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: interaction-service, port_value: 50053 }
+
+    # El mismo servicio, pero por su puerto HTTP. Va en un cluster aparte y NO
+    # lleva http2_protocol_options: un WebSocket se negocia con el Upgrade de
+    # HTTP/1.1, que sobre HTTP/2 no existe.
+    - name: interaction_ws
+      connect_timeout: 2s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: interaction_ws
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address: { address: interaction-service, port_value: 8090 }
 
     - name: ratelimit_service
       connect_timeout: 1s

@@ -39,9 +39,8 @@ const (
 	LibraryService_AddBookToSaga_FullMethodName       = "/library.v1.LibraryService/AddBookToSaga"
 	LibraryService_RemoveBookFromSaga_FullMethodName  = "/library.v1.LibraryService/RemoveBookFromSaga"
 	LibraryService_ReorderSagaBooks_FullMethodName    = "/library.v1.LibraryService/ReorderSagaBooks"
-	LibraryService_SaveBook_FullMethodName            = "/library.v1.LibraryService/SaveBook"
-	LibraryService_ListSavedBooks_FullMethodName      = "/library.v1.LibraryService/ListSavedBooks"
-	LibraryService_UnsaveBook_FullMethodName          = "/library.v1.LibraryService/UnsaveBook"
+	LibraryService_ListGenres_FullMethodName          = "/library.v1.LibraryService/ListGenres"
+	LibraryService_SetBookGenres_FullMethodName       = "/library.v1.LibraryService/SetBookGenres"
 	LibraryService_DeleteAuthorContent_FullMethodName = "/library.v1.LibraryService/DeleteAuthorContent"
 )
 
@@ -49,8 +48,9 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// LibraryService expone los dos modulos internos del servicio (content y
-// reader) detras de una sola API: el cliente no distingue modulos.
+// LibraryService es la obra del autor: libros, sus capitulos y las sagas que
+// los agrupan. Lo que el lector hace con esa obra (guardarla, marcarla como
+// favorita) no vive aqui: es otro dominio y va en su propio servicio.
 //
 // El token de sesion viaja en el header "Authorization: Bearer <token>" y se
 // resuelve contra user-service (rpc ValidateSession), que es el unico dueno de
@@ -67,13 +67,16 @@ type LibraryServiceClient interface {
 	// Listado publico y paginado: solo devuelve libros publicados, con o sin
 	// token. Para ver los propios en cualquier estado esta ListMyBooks.
 	ListBooks(ctx context.Context, in *ListBooksRequest, opts ...grpc.CallOption) (*ListBooksResponse, error)
-	// Los libros del autor autenticado, en cualquier estado.
+	// Los libros del autor autenticado, en cualquier estado y TODOS de una vez:
+	// este listado no se pagina, a diferencia del publico. Es el escritorio del
+	// autor —su obra completa, que el ya sabe cuanta es— y quien lo dibuja
+	// necesita el total sin ir pidiendo paginas.
 	//
 	// No recibe author_id a proposito: sale del token y no del cliente, que es
-	// lo unico que impide pedir la biblioteca privada de otro. La ruta literal
-	// "mine" gana contra {id} en el matcher del transcoder, asi que no choca con
+	// lo unico que impide pedir la obra inedita de otro. La ruta literal "mine"
+	// gana contra {id} en el matcher del transcoder, asi que no choca con
 	// GetBook.
-	ListMyBooks(ctx context.Context, in *ListMyBooksRequest, opts ...grpc.CallOption) (*ListBooksResponse, error)
+	ListMyBooks(ctx context.Context, in *ListMyBooksRequest, opts ...grpc.CallOption) (*ListMyBooksResponse, error)
 	// Devuelve el libro con sus capitulos.
 	GetBook(ctx context.Context, in *GetBookRequest, opts ...grpc.CallOption) (*BookDetailResponse, error)
 	// Publicar (status: published) exige que el libro ya no este vacio. Que sus
@@ -83,8 +86,20 @@ type LibraryServiceClient interface {
 	DeleteBook(ctx context.Context, in *DeleteBookRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
 	// Agrega un capitulo al libro. Es la unica forma de crear contenido, tanto
 	// el primer capitulo como los siguientes.
+	//
+	// No puede nacer publicado si el libro no lo esta: ver UpdateChapter.
 	CreateChapter(ctx context.Context, in *CreateChapterRequest, opts ...grpc.CallOption) (*ChapterResponse, error)
 	GetChapter(ctx context.Context, in *GetChapterRequest, opts ...grpc.CallOption) (*ChapterResponse, error)
+	// Publicar un capitulo exige que el libro ya este publicado: en un libro que
+	// no esta a la vista de nadie, marcar un capitulo como publico no significa
+	// nada. Si no lo esta, responde FailedPrecondition.
+	//
+	// El orden de trabajo es entonces: crear el libro, escribirle capitulos en
+	// borrador, publicar el libro (que solo exige que TENGA capitulos, no que
+	// esten publicados) y despues ir publicandolos.
+	//
+	// Despublicar no tiene restriccion, y despublicar el LIBRO no degrada sus
+	// capitulos: se quedan como estaban.
 	UpdateChapter(ctx context.Context, in *UpdateChapterRequest, opts ...grpc.CallOption) (*ChapterResponse, error)
 	// Un libro en borrador se puede vaciar del todo. Lo que falla es dejar vacio
 	// un libro publicado: primero hay que despublicarlo.
@@ -107,14 +122,22 @@ type LibraryServiceClient interface {
 	AddBookToSaga(ctx context.Context, in *AddBookToSagaRequest, opts ...grpc.CallOption) (*SagaDetailResponse, error)
 	RemoveBookFromSaga(ctx context.Context, in *RemoveBookFromSagaRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
 	ReorderSagaBooks(ctx context.Context, in *ReorderSagaBooksRequest, opts ...grpc.CallOption) (*SagaDetailResponse, error)
-	SaveBook(ctx context.Context, in *SaveBookRequest, opts ...grpc.CallOption) (*SavedBookResponse, error)
-	ListSavedBooks(ctx context.Context, in *ListSavedBooksRequest, opts ...grpc.CallOption) (*ListSavedBooksResponse, error)
-	// Si kind viene vacio, quita el libro de ambas categorias.
-	UnsaveBook(ctx context.Context, in *UnsaveBookRequest, opts ...grpc.CallOption) (*DeleteResponse, error)
+	// El catalogo completo de generos, para que el cliente arme el selector. Es
+	// una lista fija: los generos no se crean por API, salen de la migracion.
+	ListGenres(ctx context.Context, in *ListGenresRequest, opts ...grpc.CallOption) (*ListGenresResponse, error)
+	// Reemplaza los generos del libro por los que vengan (maximo 4). No es un
+	// PATCH parcial: la lista que llega es la lista que queda, y una lista vacia
+	// deja el libro sin generos.
+	//
+	// Va aparte de UpdateBook porque en proto3 un campo repeated no distingue
+	// "no lo mandes" de "dejalo vacio": dentro del PATCH no habria forma de
+	// quitar todos los generos sin inventar un flag. Aqui la semantica es una
+	// sola y no hace falta.
+	SetBookGenres(ctx context.Context, in *SetBookGenresRequest, opts ...grpc.CallOption) (*BookResponse, error)
 	// DeleteAuthorContent borra todo lo que cuelga de un usuario: sus libros
-	// (con sus capitulos), sus sagas y su biblioteca de lector. Lo llama
-	// user-service cuando alguien da de baja su cuenta, porque el CASCADE de
-	// Postgres no cruza de una base de datos a otra.
+	// (con sus capitulos y sus generos) y sus sagas. Lo llama user-service
+	// cuando alguien da de baja su cuenta, porque el CASCADE de Postgres no
+	// cruza de una base de datos a otra.
 	//
 	// Es idempotente: sobre un usuario que ya no tiene nada devuelve ceros.
 	//
@@ -153,9 +176,9 @@ func (c *libraryServiceClient) ListBooks(ctx context.Context, in *ListBooksReque
 	return out, nil
 }
 
-func (c *libraryServiceClient) ListMyBooks(ctx context.Context, in *ListMyBooksRequest, opts ...grpc.CallOption) (*ListBooksResponse, error) {
+func (c *libraryServiceClient) ListMyBooks(ctx context.Context, in *ListMyBooksRequest, opts ...grpc.CallOption) (*ListMyBooksResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListBooksResponse)
+	out := new(ListMyBooksResponse)
 	err := c.cc.Invoke(ctx, LibraryService_ListMyBooks_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
@@ -333,30 +356,20 @@ func (c *libraryServiceClient) ReorderSagaBooks(ctx context.Context, in *Reorder
 	return out, nil
 }
 
-func (c *libraryServiceClient) SaveBook(ctx context.Context, in *SaveBookRequest, opts ...grpc.CallOption) (*SavedBookResponse, error) {
+func (c *libraryServiceClient) ListGenres(ctx context.Context, in *ListGenresRequest, opts ...grpc.CallOption) (*ListGenresResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(SavedBookResponse)
-	err := c.cc.Invoke(ctx, LibraryService_SaveBook_FullMethodName, in, out, cOpts...)
+	out := new(ListGenresResponse)
+	err := c.cc.Invoke(ctx, LibraryService_ListGenres_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
 	return out, nil
 }
 
-func (c *libraryServiceClient) ListSavedBooks(ctx context.Context, in *ListSavedBooksRequest, opts ...grpc.CallOption) (*ListSavedBooksResponse, error) {
+func (c *libraryServiceClient) SetBookGenres(ctx context.Context, in *SetBookGenresRequest, opts ...grpc.CallOption) (*BookResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(ListSavedBooksResponse)
-	err := c.cc.Invoke(ctx, LibraryService_ListSavedBooks_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
-func (c *libraryServiceClient) UnsaveBook(ctx context.Context, in *UnsaveBookRequest, opts ...grpc.CallOption) (*DeleteResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DeleteResponse)
-	err := c.cc.Invoke(ctx, LibraryService_UnsaveBook_FullMethodName, in, out, cOpts...)
+	out := new(BookResponse)
+	err := c.cc.Invoke(ctx, LibraryService_SetBookGenres_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -377,8 +390,9 @@ func (c *libraryServiceClient) DeleteAuthorContent(ctx context.Context, in *Dele
 // All implementations must embed UnimplementedLibraryServiceServer
 // for forward compatibility.
 //
-// LibraryService expone los dos modulos internos del servicio (content y
-// reader) detras de una sola API: el cliente no distingue modulos.
+// LibraryService es la obra del autor: libros, sus capitulos y las sagas que
+// los agrupan. Lo que el lector hace con esa obra (guardarla, marcarla como
+// favorita) no vive aqui: es otro dominio y va en su propio servicio.
 //
 // El token de sesion viaja en el header "Authorization: Bearer <token>" y se
 // resuelve contra user-service (rpc ValidateSession), que es el unico dueno de
@@ -395,13 +409,16 @@ type LibraryServiceServer interface {
 	// Listado publico y paginado: solo devuelve libros publicados, con o sin
 	// token. Para ver los propios en cualquier estado esta ListMyBooks.
 	ListBooks(context.Context, *ListBooksRequest) (*ListBooksResponse, error)
-	// Los libros del autor autenticado, en cualquier estado.
+	// Los libros del autor autenticado, en cualquier estado y TODOS de una vez:
+	// este listado no se pagina, a diferencia del publico. Es el escritorio del
+	// autor —su obra completa, que el ya sabe cuanta es— y quien lo dibuja
+	// necesita el total sin ir pidiendo paginas.
 	//
 	// No recibe author_id a proposito: sale del token y no del cliente, que es
-	// lo unico que impide pedir la biblioteca privada de otro. La ruta literal
-	// "mine" gana contra {id} en el matcher del transcoder, asi que no choca con
+	// lo unico que impide pedir la obra inedita de otro. La ruta literal "mine"
+	// gana contra {id} en el matcher del transcoder, asi que no choca con
 	// GetBook.
-	ListMyBooks(context.Context, *ListMyBooksRequest) (*ListBooksResponse, error)
+	ListMyBooks(context.Context, *ListMyBooksRequest) (*ListMyBooksResponse, error)
 	// Devuelve el libro con sus capitulos.
 	GetBook(context.Context, *GetBookRequest) (*BookDetailResponse, error)
 	// Publicar (status: published) exige que el libro ya no este vacio. Que sus
@@ -411,8 +428,20 @@ type LibraryServiceServer interface {
 	DeleteBook(context.Context, *DeleteBookRequest) (*DeleteResponse, error)
 	// Agrega un capitulo al libro. Es la unica forma de crear contenido, tanto
 	// el primer capitulo como los siguientes.
+	//
+	// No puede nacer publicado si el libro no lo esta: ver UpdateChapter.
 	CreateChapter(context.Context, *CreateChapterRequest) (*ChapterResponse, error)
 	GetChapter(context.Context, *GetChapterRequest) (*ChapterResponse, error)
+	// Publicar un capitulo exige que el libro ya este publicado: en un libro que
+	// no esta a la vista de nadie, marcar un capitulo como publico no significa
+	// nada. Si no lo esta, responde FailedPrecondition.
+	//
+	// El orden de trabajo es entonces: crear el libro, escribirle capitulos en
+	// borrador, publicar el libro (que solo exige que TENGA capitulos, no que
+	// esten publicados) y despues ir publicandolos.
+	//
+	// Despublicar no tiene restriccion, y despublicar el LIBRO no degrada sus
+	// capitulos: se quedan como estaban.
 	UpdateChapter(context.Context, *UpdateChapterRequest) (*ChapterResponse, error)
 	// Un libro en borrador se puede vaciar del todo. Lo que falla es dejar vacio
 	// un libro publicado: primero hay que despublicarlo.
@@ -435,14 +464,22 @@ type LibraryServiceServer interface {
 	AddBookToSaga(context.Context, *AddBookToSagaRequest) (*SagaDetailResponse, error)
 	RemoveBookFromSaga(context.Context, *RemoveBookFromSagaRequest) (*DeleteResponse, error)
 	ReorderSagaBooks(context.Context, *ReorderSagaBooksRequest) (*SagaDetailResponse, error)
-	SaveBook(context.Context, *SaveBookRequest) (*SavedBookResponse, error)
-	ListSavedBooks(context.Context, *ListSavedBooksRequest) (*ListSavedBooksResponse, error)
-	// Si kind viene vacio, quita el libro de ambas categorias.
-	UnsaveBook(context.Context, *UnsaveBookRequest) (*DeleteResponse, error)
+	// El catalogo completo de generos, para que el cliente arme el selector. Es
+	// una lista fija: los generos no se crean por API, salen de la migracion.
+	ListGenres(context.Context, *ListGenresRequest) (*ListGenresResponse, error)
+	// Reemplaza los generos del libro por los que vengan (maximo 4). No es un
+	// PATCH parcial: la lista que llega es la lista que queda, y una lista vacia
+	// deja el libro sin generos.
+	//
+	// Va aparte de UpdateBook porque en proto3 un campo repeated no distingue
+	// "no lo mandes" de "dejalo vacio": dentro del PATCH no habria forma de
+	// quitar todos los generos sin inventar un flag. Aqui la semantica es una
+	// sola y no hace falta.
+	SetBookGenres(context.Context, *SetBookGenresRequest) (*BookResponse, error)
 	// DeleteAuthorContent borra todo lo que cuelga de un usuario: sus libros
-	// (con sus capitulos), sus sagas y su biblioteca de lector. Lo llama
-	// user-service cuando alguien da de baja su cuenta, porque el CASCADE de
-	// Postgres no cruza de una base de datos a otra.
+	// (con sus capitulos y sus generos) y sus sagas. Lo llama user-service
+	// cuando alguien da de baja su cuenta, porque el CASCADE de Postgres no
+	// cruza de una base de datos a otra.
 	//
 	// Es idempotente: sobre un usuario que ya no tiene nada devuelve ceros.
 	//
@@ -467,7 +504,7 @@ func (UnimplementedLibraryServiceServer) CreateBook(context.Context, *CreateBook
 func (UnimplementedLibraryServiceServer) ListBooks(context.Context, *ListBooksRequest) (*ListBooksResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListBooks not implemented")
 }
-func (UnimplementedLibraryServiceServer) ListMyBooks(context.Context, *ListMyBooksRequest) (*ListBooksResponse, error) {
+func (UnimplementedLibraryServiceServer) ListMyBooks(context.Context, *ListMyBooksRequest) (*ListMyBooksResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListMyBooks not implemented")
 }
 func (UnimplementedLibraryServiceServer) GetBook(context.Context, *GetBookRequest) (*BookDetailResponse, error) {
@@ -521,14 +558,11 @@ func (UnimplementedLibraryServiceServer) RemoveBookFromSaga(context.Context, *Re
 func (UnimplementedLibraryServiceServer) ReorderSagaBooks(context.Context, *ReorderSagaBooksRequest) (*SagaDetailResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReorderSagaBooks not implemented")
 }
-func (UnimplementedLibraryServiceServer) SaveBook(context.Context, *SaveBookRequest) (*SavedBookResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method SaveBook not implemented")
+func (UnimplementedLibraryServiceServer) ListGenres(context.Context, *ListGenresRequest) (*ListGenresResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListGenres not implemented")
 }
-func (UnimplementedLibraryServiceServer) ListSavedBooks(context.Context, *ListSavedBooksRequest) (*ListSavedBooksResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method ListSavedBooks not implemented")
-}
-func (UnimplementedLibraryServiceServer) UnsaveBook(context.Context, *UnsaveBookRequest) (*DeleteResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method UnsaveBook not implemented")
+func (UnimplementedLibraryServiceServer) SetBookGenres(context.Context, *SetBookGenresRequest) (*BookResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetBookGenres not implemented")
 }
 func (UnimplementedLibraryServiceServer) DeleteAuthorContent(context.Context, *DeleteAuthorContentRequest) (*DeleteAuthorContentResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteAuthorContent not implemented")
@@ -914,56 +948,38 @@ func _LibraryService_ReorderSagaBooks_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _LibraryService_SaveBook_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(SaveBookRequest)
+func _LibraryService_ListGenres_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListGenresRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(LibraryServiceServer).SaveBook(ctx, in)
+		return srv.(LibraryServiceServer).ListGenres(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: LibraryService_SaveBook_FullMethodName,
+		FullMethod: LibraryService_ListGenres_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(LibraryServiceServer).SaveBook(ctx, req.(*SaveBookRequest))
+		return srv.(LibraryServiceServer).ListGenres(ctx, req.(*ListGenresRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
 
-func _LibraryService_ListSavedBooks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(ListSavedBooksRequest)
+func _LibraryService_SetBookGenres_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetBookGenresRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(LibraryServiceServer).ListSavedBooks(ctx, in)
+		return srv.(LibraryServiceServer).SetBookGenres(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: LibraryService_ListSavedBooks_FullMethodName,
+		FullMethod: LibraryService_SetBookGenres_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(LibraryServiceServer).ListSavedBooks(ctx, req.(*ListSavedBooksRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
-func _LibraryService_UnsaveBook_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(UnsaveBookRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(LibraryServiceServer).UnsaveBook(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: LibraryService_UnsaveBook_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(LibraryServiceServer).UnsaveBook(ctx, req.(*UnsaveBookRequest))
+		return srv.(LibraryServiceServer).SetBookGenres(ctx, req.(*SetBookGenresRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -1074,16 +1090,12 @@ var LibraryService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _LibraryService_ReorderSagaBooks_Handler,
 		},
 		{
-			MethodName: "SaveBook",
-			Handler:    _LibraryService_SaveBook_Handler,
+			MethodName: "ListGenres",
+			Handler:    _LibraryService_ListGenres_Handler,
 		},
 		{
-			MethodName: "ListSavedBooks",
-			Handler:    _LibraryService_ListSavedBooks_Handler,
-		},
-		{
-			MethodName: "UnsaveBook",
-			Handler:    _LibraryService_UnsaveBook_Handler,
+			MethodName: "SetBookGenres",
+			Handler:    _LibraryService_SetBookGenres_Handler,
 		},
 		{
 			MethodName: "DeleteAuthorContent",

@@ -3,9 +3,6 @@ package service
 import (
 	"context"
 
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/cache"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
 	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
@@ -17,17 +14,23 @@ type cachedSagaDetail struct {
 	Books []*domain.Book `json:"books"`
 }
 
+// cachedSagaList es lo que se guarda en Valkey para los listados de sagas.
+type cachedSagaList struct {
+	Sagas []*domain.Saga `json:"sagas"`
+	Total int32          `json:"total"`
+}
+
 func (s *LibraryService) CreateSaga(ctx context.Context, req *libraryv1.CreateSagaRequest) (*libraryv1.SagaResponse, error) {
 	authorID, err := s.auth.Require(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	title, err := requiredText("title", req.GetTitle(), titleMaxLen)
+	title, err := titleField.Required(req.GetTitle())
 	if err != nil {
 		return nil, err
 	}
-	description, err := optionalText("description", req.GetDescription(), descriptionMaxLen)
+	description, err := descriptionField.Optional(req.GetDescription())
 	if err != nil {
 		return nil, err
 	}
@@ -41,15 +44,9 @@ func (s *LibraryService) CreateSaga(ctx context.Context, req *libraryv1.CreateSa
 		return nil, mapRepoErr(err, "failed to create saga")
 	}
 
-	s.invalidate(ctx)
+	s.cache.Invalidate(ctx)
 
 	return &libraryv1.SagaResponse{Saga: sagaToProto(created)}, nil
-}
-
-// cachedSagaList es lo que se guarda en Valkey para los listados de sagas.
-type cachedSagaList struct {
-	Sagas []*domain.Saga `json:"sagas"`
-	Total int32          `json:"total"`
 }
 
 // ListSagas es el listado publico. Las sagas no tienen estado, asi que no hay
@@ -60,14 +57,13 @@ func (s *LibraryService) ListSagas(ctx context.Context, req *libraryv1.ListSagas
 		return nil, err
 	}
 
-	filter := normalizeSagaPagination(domain.SagaFilter{
-		Page:     req.GetPage(),
-		PageSize: req.GetPageSize(),
+	filter := domain.SagaFilter{
 		AuthorID: authorID,
 		Search:   req.GetSearch(),
-	})
+	}
+	filter.Page, filter.PageSize = normalizePage(req.GetPage(), req.GetPageSize())
 
-	return s.listSagas(ctx, filter, "pub")
+	return s.listSagas(ctx, filter, scopePublic)
 }
 
 // ListMySagas devuelve las sagas del autor autenticado. El author_id sale del
@@ -78,28 +74,22 @@ func (s *LibraryService) ListMySagas(ctx context.Context, req *libraryv1.ListMyS
 		return nil, err
 	}
 
-	filter := normalizeSagaPagination(domain.SagaFilter{
-		Page:     req.GetPage(),
-		PageSize: req.GetPageSize(),
+	filter := domain.SagaFilter{
 		AuthorID: authorID,
 		Search:   req.GetSearch(),
-	})
+	}
+	filter.Page, filter.PageSize = normalizePage(req.GetPage(), req.GetPageSize())
 
-	return s.listSagas(ctx, filter, "own")
+	return s.listSagas(ctx, filter, scopeOwner)
 }
 
 func (s *LibraryService) listSagas(ctx context.Context, filter domain.SagaFilter, scope string) (*libraryv1.ListSagasResponse, error) {
 	var cached cachedSagaList
-	key, hit := s.cacheGet(ctx, &cached, "sagas",
+	key, hit := s.cache.Get(ctx, &cached, "sagas",
 		scope, filter.AuthorID, filter.Search,
 		cache.FormatInt(filter.Page), cache.FormatInt(filter.PageSize))
 	if hit {
-		return &libraryv1.ListSagasResponse{
-			Sagas:    sagasToProto(cached.Sagas),
-			Total:    cached.Total,
-			Page:     filter.Page,
-			PageSize: filter.PageSize,
-		}, nil
+		return sagaList(cached.Sagas, cached.Total, filter), nil
 	}
 
 	sagas, total, err := s.sagas.List(ctx, filter)
@@ -107,27 +97,18 @@ func (s *LibraryService) listSagas(ctx context.Context, filter domain.SagaFilter
 		return nil, mapRepoErr(err, "failed to list sagas")
 	}
 
-	s.cacheSet(ctx, key, cachedSagaList{Sagas: sagas, Total: total})
+	s.cache.Set(ctx, key, cachedSagaList{Sagas: sagas, Total: total})
 
+	return sagaList(sagas, total, filter), nil
+}
+
+func sagaList(sagas []*domain.Saga, total int32, filter domain.SagaFilter) *libraryv1.ListSagasResponse {
 	return &libraryv1.ListSagasResponse{
 		Sagas:    sagasToProto(sagas),
 		Total:    total,
 		Page:     filter.Page,
 		PageSize: filter.PageSize,
-	}, nil
-}
-
-func normalizeSagaPagination(f domain.SagaFilter) domain.SagaFilter {
-	if f.Page < 1 {
-		f.Page = 1
 	}
-	if f.PageSize < 1 {
-		f.PageSize = defaultPageSize
-	}
-	if f.PageSize > maxPageSize {
-		f.PageSize = maxPageSize
-	}
-	return f
 }
 
 // GetSaga devuelve la saga con sus libros ordenados. La saga en si es publica
@@ -144,72 +125,80 @@ func (s *LibraryService) GetSaga(ctx context.Context, req *libraryv1.GetSagaRequ
 		return nil, err
 	}
 
+	// Mismo atajo que en GetBook: si la version publica esta cacheada y quien
+	// pregunta no es el autor de la saga, ya esta servida sin tocar Postgres.
+	var pub cachedSagaDetail
+	pubKey, hit := s.cache.Get(ctx, &pub, "saga", id, scopePublic)
+	if hit && pub.Saga != nil && pub.Saga.AuthorID != callerID {
+		return sagaDetail(pub.Saga, pub.Books), nil
+	}
+
 	saga, err := s.sagas.GetByID(ctx, id)
 	if err != nil {
 		return nil, mapRepoErr(err, "failed to load saga")
 	}
 	isAuthor := callerID != "" && saga.AuthorID == callerID
 
-	scope := "pub"
+	key := pubKey
 	if isAuthor {
-		scope = "own"
-	}
-	var cached cachedSagaDetail
-	key, hit := s.cacheGet(ctx, &cached, "saga", id, scope)
-	if hit {
-		return &libraryv1.SagaDetailResponse{
-			Saga:  sagaToProto(cached.Saga),
-			Books: booksToProto(cached.Books),
-		}, nil
+		var own cachedSagaDetail
+		ownKey, ownHit := s.cache.Get(ctx, &own, "saga", id, scopeOwner)
+		if ownHit && own.Saga != nil {
+			return sagaDetail(own.Saga, own.Books), nil
+		}
+		key = ownKey
 	}
 
-	books, err := s.sagas.ListBooks(ctx, id, callerID)
+	books, err := s.sagas.ListBooks(ctx, id)
 	if err != nil {
 		return nil, mapRepoErr(err, "failed to load saga books")
 	}
 	if !isAuthor {
-		visible := make([]*domain.Book, 0, len(books))
-		for _, b := range books {
-			if b.Status == domain.BookStatusPublished {
-				visible = append(visible, b)
-			}
-		}
-		books = visible
+		books = publishedOnly(books)
 	}
 
-	s.cacheSet(ctx, key, cachedSagaDetail{Saga: saga, Books: books})
+	s.cache.Set(ctx, key, cachedSagaDetail{Saga: saga, Books: books})
 
+	return sagaDetail(saga, books), nil
+}
+
+// publishedOnly deja fuera los libros que el lector ajeno no puede ver. Se
+// filtra aqui y no en la consulta porque la misma lista, sin filtrar, es la que
+// le toca al autor.
+func publishedOnly(books []*domain.Book) []*domain.Book {
+	visible := make([]*domain.Book, 0, len(books))
+	for _, b := range books {
+		if b.Status == domain.BookStatusPublished {
+			visible = append(visible, b)
+		}
+	}
+	return visible
+}
+
+func sagaDetail(saga *domain.Saga, books []*domain.Book) *libraryv1.SagaDetailResponse {
 	return &libraryv1.SagaDetailResponse{
 		Saga:  sagaToProto(saga),
 		Books: booksToProto(books),
-	}, nil
+	}
 }
 
 func (s *LibraryService) UpdateSaga(ctx context.Context, req *libraryv1.UpdateSagaRequest) (*libraryv1.SagaResponse, error) {
-	id, err := requiredID("id", req.GetId())
+	saga, _, err := s.requireOwnedSaga(ctx, "id", req.GetId())
 	if err != nil {
 		return nil, err
 	}
 
-	callerID, err := s.auth.Require(ctx)
+	title, err := titleField.UpdateRequired(req.Title)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.ownedSaga(ctx, id, callerID); err != nil {
-		return nil, err
-	}
-
-	title, err := validateRequiredUpdate("title", req.Title, titleMaxLen)
-	if err != nil {
-		return nil, err
-	}
-	description, err := validateOptionalText("description", req.Description, descriptionMaxLen)
+	description, err := descriptionField.Update(req.Description)
 	if err != nil {
 		return nil, err
 	}
 
 	updated, err := s.sagas.Update(ctx, &domain.SagaUpdate{
-		ID:          id,
+		ID:          saga.ID,
 		Title:       title,
 		Description: description,
 	})
@@ -217,7 +206,7 @@ func (s *LibraryService) UpdateSaga(ctx context.Context, req *libraryv1.UpdateSa
 		return nil, mapRepoErr(err, "failed to update saga")
 	}
 
-	s.invalidate(ctx)
+	s.cache.Invalidate(ctx)
 
 	return &libraryv1.SagaResponse{Saga: sagaToProto(updated)}, nil
 }
@@ -225,24 +214,16 @@ func (s *LibraryService) UpdateSaga(ctx context.Context, req *libraryv1.UpdateSa
 // DeleteSaga borra la saga y sus vinculos; los libros no se tocan, porque
 // pertenecer a una saga es opcional.
 func (s *LibraryService) DeleteSaga(ctx context.Context, req *libraryv1.DeleteSagaRequest) (*libraryv1.DeleteResponse, error) {
-	id, err := requiredID("id", req.GetId())
+	saga, _, err := s.requireOwnedSaga(ctx, "id", req.GetId())
 	if err != nil {
 		return nil, err
 	}
 
-	callerID, err := s.auth.Require(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := s.ownedSaga(ctx, id, callerID); err != nil {
-		return nil, err
-	}
-
-	if err := s.sagas.Delete(ctx, id); err != nil {
+	if err := s.sagas.Delete(ctx, saga.ID); err != nil {
 		return nil, mapRepoErr(err, "failed to delete saga")
 	}
 
-	s.invalidate(ctx)
+	s.cache.Invalidate(ctx)
 
 	return &libraryv1.DeleteResponse{Success: true}, nil
 }
@@ -251,20 +232,11 @@ func (s *LibraryService) DeleteSaga(ctx context.Context, req *libraryv1.DeleteSa
 // autor: una saga es una coleccion de la obra propia, no una lista de lecturas
 // (para eso esta el modulo reader).
 func (s *LibraryService) AddBookToSaga(ctx context.Context, req *libraryv1.AddBookToSagaRequest) (*libraryv1.SagaDetailResponse, error) {
-	sagaID, err := requiredID("saga_id", req.GetSagaId())
+	saga, callerID, err := s.requireOwnedSaga(ctx, "saga_id", req.GetSagaId())
 	if err != nil {
 		return nil, err
 	}
 	bookID, err := requiredID("book_id", req.GetBookId())
-	if err != nil {
-		return nil, err
-	}
-
-	callerID, err := s.auth.Require(ctx)
-	if err != nil {
-		return nil, err
-	}
-	saga, err := s.ownedSaga(ctx, sagaID, callerID)
 	if err != nil {
 		return nil, err
 	}
@@ -272,29 +244,26 @@ func (s *LibraryService) AddBookToSaga(ctx context.Context, req *libraryv1.AddBo
 		return nil, err
 	}
 
-	if req.GetPosition() < 0 {
-		return nil, status.Error(codes.InvalidArgument, "position must be greater than zero")
+	if err := requiredPosition(req.GetPosition()); err != nil {
+		return nil, err
 	}
 
-	if err := s.sagas.AddBook(ctx, sagaID, bookID, req.GetPosition()); err != nil {
+	if err := s.sagas.AddBook(ctx, saga.ID, bookID, req.GetPosition()); err != nil {
 		return nil, mapRepoErr(err, "failed to add book to saga")
 	}
 
-	s.invalidate(ctx)
+	s.cache.Invalidate(ctx)
 
-	books, err := s.sagas.ListBooks(ctx, sagaID, callerID)
+	books, err := s.sagas.ListBooks(ctx, saga.ID)
 	if err != nil {
 		return nil, mapRepoErr(err, "failed to load saga books")
 	}
 
-	return &libraryv1.SagaDetailResponse{
-		Saga:  sagaToProto(saga),
-		Books: booksToProto(books),
-	}, nil
+	return sagaDetail(saga, books), nil
 }
 
 func (s *LibraryService) RemoveBookFromSaga(ctx context.Context, req *libraryv1.RemoveBookFromSagaRequest) (*libraryv1.DeleteResponse, error) {
-	sagaID, err := requiredID("saga_id", req.GetSagaId())
+	saga, _, err := s.requireOwnedSaga(ctx, "saga_id", req.GetSagaId())
 	if err != nil {
 		return nil, err
 	}
@@ -303,67 +272,37 @@ func (s *LibraryService) RemoveBookFromSaga(ctx context.Context, req *libraryv1.
 		return nil, err
 	}
 
-	callerID, err := s.auth.Require(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := s.ownedSaga(ctx, sagaID, callerID); err != nil {
-		return nil, err
-	}
-
-	if err := s.sagas.RemoveBook(ctx, sagaID, bookID); err != nil {
+	if err := s.sagas.RemoveBook(ctx, saga.ID, bookID); err != nil {
 		return nil, mapRepoErr(err, "failed to remove book from saga")
 	}
 
-	s.invalidate(ctx)
+	s.cache.Invalidate(ctx)
 
 	return &libraryv1.DeleteResponse{Success: true}, nil
 }
 
 // ReorderSagaBooks recibe todos los libros de la saga en el orden deseado.
 func (s *LibraryService) ReorderSagaBooks(ctx context.Context, req *libraryv1.ReorderSagaBooksRequest) (*libraryv1.SagaDetailResponse, error) {
-	sagaID, err := requiredID("saga_id", req.GetSagaId())
-	if err != nil {
-		return nil, err
-	}
-
-	callerID, err := s.auth.Require(ctx)
-	if err != nil {
-		return nil, err
-	}
-	saga, err := s.ownedSaga(ctx, sagaID, callerID)
+	saga, _, err := s.requireOwnedSaga(ctx, "saga_id", req.GetSagaId())
 	if err != nil {
 		return nil, err
 	}
 
 	ids := req.GetBookIds()
-	if len(ids) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "book_ids is required")
-	}
-	seen := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		if id == "" {
-			return nil, status.Error(codes.InvalidArgument, "book_ids cannot contain empty values")
-		}
-		if _, dup := seen[id]; dup {
-			return nil, status.Error(codes.InvalidArgument, "book_ids cannot contain duplicates")
-		}
-		seen[id] = struct{}{}
+	if err := requiredIDs("book_ids", ids); err != nil {
+		return nil, err
 	}
 
-	if err := s.sagas.ReorderBooks(ctx, sagaID, ids); err != nil {
+	if err := s.sagas.ReorderBooks(ctx, saga.ID, ids); err != nil {
 		return nil, mapRepoErr(err, "failed to reorder saga books")
 	}
 
-	s.invalidate(ctx)
+	s.cache.Invalidate(ctx)
 
-	books, err := s.sagas.ListBooks(ctx, sagaID, callerID)
+	books, err := s.sagas.ListBooks(ctx, saga.ID)
 	if err != nil {
 		return nil, mapRepoErr(err, "failed to load saga books")
 	}
 
-	return &libraryv1.SagaDetailResponse{
-		Saga:  sagaToProto(saga),
-		Books: booksToProto(books),
-	}, nil
+	return sagaDetail(saga, books), nil
 }

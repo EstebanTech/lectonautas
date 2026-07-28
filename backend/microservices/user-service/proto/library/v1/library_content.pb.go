@@ -76,12 +76,11 @@ func (x *DeleteAuthorContentRequest) GetUserId() string {
 }
 
 type DeleteAuthorContentResponse struct {
-	state             protoimpl.MessageState `protogen:"open.v1"`
-	BooksDeleted      int32                  `protobuf:"varint,1,opt,name=books_deleted,json=booksDeleted,proto3" json:"books_deleted,omitempty"`
-	SagasDeleted      int32                  `protobuf:"varint,2,opt,name=sagas_deleted,json=sagasDeleted,proto3" json:"sagas_deleted,omitempty"`
-	SavedBooksDeleted int32                  `protobuf:"varint,3,opt,name=saved_books_deleted,json=savedBooksDeleted,proto3" json:"saved_books_deleted,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	BooksDeleted  int32                  `protobuf:"varint,1,opt,name=books_deleted,json=booksDeleted,proto3" json:"books_deleted,omitempty"`
+	SagasDeleted  int32                  `protobuf:"varint,2,opt,name=sagas_deleted,json=sagasDeleted,proto3" json:"sagas_deleted,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeleteAuthorContentResponse) Reset() {
@@ -128,13 +127,6 @@ func (x *DeleteAuthorContentResponse) GetSagasDeleted() int32 {
 	return 0
 }
 
-func (x *DeleteAuthorContentResponse) GetSavedBooksDeleted() int32 {
-	if x != nil {
-		return x.SavedBooksDeleted
-	}
-	return 0
-}
-
 var File_library_v1_library_content_proto protoreflect.FileDescriptor
 
 const file_library_v1_library_content_proto_rawDesc = "" +
@@ -142,11 +134,10 @@ const file_library_v1_library_content_proto_rawDesc = "" +
 	" library/v1/library_content.proto\x12\n" +
 	"library.v1\"5\n" +
 	"\x1aDeleteAuthorContentRequest\x12\x17\n" +
-	"\auser_id\x18\x01 \x01(\tR\x06userId\"\x97\x01\n" +
+	"\auser_id\x18\x01 \x01(\tR\x06userId\"\x82\x01\n" +
 	"\x1bDeleteAuthorContentResponse\x12#\n" +
 	"\rbooks_deleted\x18\x01 \x01(\x05R\fbooksDeleted\x12#\n" +
-	"\rsagas_deleted\x18\x02 \x01(\x05R\fsagasDeleted\x12.\n" +
-	"\x13saved_books_deleted\x18\x03 \x01(\x05R\x11savedBooksDeleted2x\n" +
+	"\rsagas_deleted\x18\x02 \x01(\x05R\fsagasDeletedJ\x04\b\x03\x10\x04R\x13saved_books_deleted2x\n" +
 	"\x0eLibraryService\x12f\n" +
 	"\x13DeleteAuthorContent\x12&.library.v1.DeleteAuthorContentRequest\x1a'.library.v1.DeleteAuthorContentResponseBbZ`github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/library/v1;libraryv1b\x06proto3"
 

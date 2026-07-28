@@ -10,7 +10,7 @@ import (
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
 )
 
-const chapterColumns = `id::text, book_id::text, title, content, position, status, created_at, updated_at`
+const chapterColumns = `id::text, book_id::text, title, content, position, status, created_at, updated_at, published_at`
 
 type ChapterRepository interface {
 	Create(ctx context.Context, ch *domain.Chapter) (*domain.Chapter, error)
@@ -40,14 +40,21 @@ func NewPostgresChapterRepository(pool *pgxpool.Pool) *PostgresChapterRepository
 // COALESCE(max(position), 0) + 1 se resuelve dentro del mismo INSERT para no
 // hacer dos viajes ni abrir una ventana entre leer el maximo y escribir.
 func (r *PostgresChapterRepository) Create(ctx context.Context, ch *domain.Chapter) (*domain.Chapter, error) {
+	// Un capitulo si puede nacer publicado (si el libro ya lo esta), asi que la
+	// fecha se resuelve en el propio INSERT. El CASE sin ELSE da NULL, que es
+	// justo lo que corresponde a un borrador: todavia no se publico.
 	const query = `
-		INSERT INTO content.chapters (book_id, title, content, position, status)
+		INSERT INTO content.chapters (book_id, title, content, position, status, published_at)
 		VALUES (
 			$1, $2, $3,
 			CASE WHEN $4::int > 0 THEN $4::int
 			     ELSE (SELECT COALESCE(max(position), 0) + 1 FROM content.chapters WHERE book_id = $1)
 			END,
-			$5
+			$5,
+			-- El cast es necesario: sin el, $5 se deduce varchar por la columna
+			-- status y text por esta comparacion, y Postgres rechaza el
+			-- parametro con tipos inconsistentes.
+			CASE WHEN $5::varchar = 'published' THEN now() END
 		)
 		RETURNING ` + chapterColumns
 
@@ -109,6 +116,11 @@ func (r *PostgresChapterRepository) Update(ctx context.Context, upd *domain.Chap
 	}
 	if upd.Status != nil {
 		set("status", *upd.Status)
+		// Misma regla que en los libros: se escribe la primera vez y nunca se
+		// pisa, todo dentro del mismo UPDATE.
+		if *upd.Status == domain.ChapterStatusPublished {
+			sets = append(sets, "published_at = COALESCE(published_at, now())")
+		}
 	}
 
 	query := `UPDATE content.chapters SET ` + strings.Join(sets, ", ") +
@@ -209,7 +221,8 @@ func (r *PostgresChapterRepository) Reorder(ctx context.Context, bookID string, 
 
 func scanChapter(s scanner) (*domain.Chapter, error) {
 	ch := &domain.Chapter{}
-	err := s.Scan(&ch.ID, &ch.BookID, &ch.Title, &ch.Content, &ch.Position, &ch.Status, &ch.CreatedAt, &ch.UpdatedAt)
+	err := s.Scan(&ch.ID, &ch.BookID, &ch.Title, &ch.Content, &ch.Position, &ch.Status,
+		&ch.CreatedAt, &ch.UpdatedAt, &ch.PublishedAt)
 	if err != nil {
 		return nil, err
 	}

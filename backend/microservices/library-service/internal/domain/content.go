@@ -12,6 +12,19 @@ const (
 	ChapterStatusPublished = "published"
 )
 
+// GenreMaxPerBook es el tope de generos que puede llevar un libro. Lo valida el
+// servicio y lo vuelve a exigir un trigger en la BD, que es donde esta escrito
+// el mismo numero.
+const GenreMaxPerBook = 4
+
+// Genre es una entrada del catalogo de generos, que es fijo: sale de la
+// migracion y no se crea por API. Slug es el identificador estable y Name la
+// etiqueta que se le muestra al lector.
+type Genre struct {
+	Slug string
+	Name string
+}
+
 // Book es un libro del autor. El texto no vive aqui: books no tiene columna de
 // contenido, todo esta en Chapter.
 type Book struct {
@@ -23,10 +36,19 @@ type Book struct {
 	Status      string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
-	// ChapterCount son los capitulos visibles para quien pidio el libro: todos
-	// si es el autor, solo los publicados si es cualquier otro. Lo calcula la
+	// PublishedAt es cuando el libro se publico por PRIMERA vez, o nil si
+	// nunca lo estuvo. No se borra al despublicar ni se pisa al volver a
+	// publicar: es la fecha en que la obra salio, no la del ultimo cambio de
+	// estado. Pisarla dejaria que un autor se colara una y otra vez en las
+	// novedades con solo despublicar y republicar.
+	PublishedAt *time.Time
+	// ChapterCount son los capitulos PUBLICADOS del libro, para todo el mundo
+	// por igual: un borrador todavia no es parte del libro. Lo calcula la
 	// consulta, no se guarda en books.
 	ChapterCount int32
+	// Genres son los generos del libro, entre 0 y GenreMaxPerBook. Viven en su
+	// propia tabla y se traen en una consulta aparte, no columna de books.
+	Genres []*Genre
 }
 
 // BookUpdate describe una modificacion parcial: los campos en nil se dejan
@@ -48,6 +70,9 @@ type Chapter struct {
 	Status    string
 	CreatedAt time.Time
 	UpdatedAt time.Time
+	// PublishedAt sigue la misma regla que la del libro: la primera vez que se
+	// publico, y nil si nunca.
+	PublishedAt *time.Time
 }
 
 type ChapterUpdate struct {
@@ -73,17 +98,19 @@ type SagaUpdate struct {
 	Description *string
 }
 
-// BookFilter son los filtros del listado publico de libros. Page es 1-based.
+// BookFilter son los filtros de los listados de libros. Page es 1-based.
 type BookFilter struct {
-	Page     int32
+	Page int32
+	// PageSize en 0 (o menos) pide TODO sin paginar: la consulta sale sin LIMIT
+	// ni OFFSET. Es lo que usa el listado de los libros propios; el publico
+	// siempre llega con un tamano ya normalizado.
 	PageSize int32
 	AuthorID string
 	Status   string
 	Search   string
-	// ViewerID es quien pide el listado, vacio si no vino token. No filtra
-	// nada: decide de que libros se cuentan tambien los capitulos en borrador
-	// (los suyos).
-	ViewerID string
+	// Genre es el slug por el que se filtra, vacio si no se filtra. Un libro
+	// entra si lo tiene entre los suyos.
+	Genre string
 }
 
 // SagaFilter son los filtros del listado de sagas. Las sagas no tienen estado,

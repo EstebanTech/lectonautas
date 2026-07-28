@@ -7,8 +7,9 @@ option go_package = "github.com/EstebanTech/lectonautas/backend/microservices/li
 import "google/api/annotations.proto";
 import "google/protobuf/timestamp.proto";
 
-// LibraryService expone los dos modulos internos del servicio (content y
-// reader) detras de una sola API: el cliente no distingue modulos.
+// LibraryService es la obra del autor: libros, sus capitulos y las sagas que
+// los agrupan. Lo que el lector hace con esa obra (guardarla, marcarla como
+// favorita) no vive aqui: es otro dominio y va en su propio servicio.
 //
 // El token de sesion viaja en el header "Authorization: Bearer <token>" y se
 // resuelve contra user-service (rpc ValidateSession), que es el unico dueno de
@@ -36,13 +37,16 @@ service LibraryService {
       get: "/v1/books"
     };
   }
-  // Los libros del autor autenticado, en cualquier estado.
+  // Los libros del autor autenticado, en cualquier estado y TODOS de una vez:
+  // este listado no se pagina, a diferencia del publico. Es el escritorio del
+  // autor —su obra completa, que el ya sabe cuanta es— y quien lo dibuja
+  // necesita el total sin ir pidiendo paginas.
   //
   // No recibe author_id a proposito: sale del token y no del cliente, que es
-  // lo unico que impide pedir la biblioteca privada de otro. La ruta literal
-  // "mine" gana contra {id} en el matcher del transcoder, asi que no choca con
+  // lo unico que impide pedir la obra inedita de otro. La ruta literal "mine"
+  // gana contra {id} en el matcher del transcoder, asi que no choca con
   // GetBook.
-  rpc ListMyBooks(ListMyBooksRequest) returns (ListBooksResponse) {
+  rpc ListMyBooks(ListMyBooksRequest) returns (ListMyBooksResponse) {
     option (google.api.http) = {
       get: "/v1/books/mine"
     };
@@ -72,6 +76,8 @@ service LibraryService {
 
   // Agrega un capitulo al libro. Es la unica forma de crear contenido, tanto
   // el primer capitulo como los siguientes.
+  //
+  // No puede nacer publicado si el libro no lo esta: ver UpdateChapter.
   rpc CreateChapter(CreateChapterRequest) returns (ChapterResponse) {
     option (google.api.http) = {
       post: "/v1/books/{book_id}/chapters"
@@ -83,6 +89,16 @@ service LibraryService {
       get: "/v1/books/{book_id}/chapters/{id}"
     };
   }
+  // Publicar un capitulo exige que el libro ya este publicado: en un libro que
+  // no esta a la vista de nadie, marcar un capitulo como publico no significa
+  // nada. Si no lo esta, responde FailedPrecondition.
+  //
+  // El orden de trabajo es entonces: crear el libro, escribirle capitulos en
+  // borrador, publicar el libro (que solo exige que TENGA capitulos, no que
+  // esten publicados) y despues ir publicandolos.
+  //
+  // Despublicar no tiene restriccion, y despublicar el LIBRO no degrada sus
+  // capitulos: se quedan como estaban.
   rpc UpdateChapter(UpdateChapterRequest) returns (ChapterResponse) {
     option (google.api.http) = {
       patch: "/v1/books/{book_id}/chapters/{id}"
@@ -163,32 +179,36 @@ service LibraryService {
     };
   }
 
-  // --- reader: biblioteca del lector --------------------------------------
+  // --- content: generos ---------------------------------------------------
 
-  rpc SaveBook(SaveBookRequest) returns (SavedBookResponse) {
+  // El catalogo completo de generos, para que el cliente arme el selector. Es
+  // una lista fija: los generos no se crean por API, salen de la migracion.
+  rpc ListGenres(ListGenresRequest) returns (ListGenresResponse) {
     option (google.api.http) = {
-      post: "/v1/library"
+      get: "/v1/genres"
+    };
+  }
+  // Reemplaza los generos del libro por los que vengan (maximo 4). No es un
+  // PATCH parcial: la lista que llega es la lista que queda, y una lista vacia
+  // deja el libro sin generos.
+  //
+  // Va aparte de UpdateBook porque en proto3 un campo repeated no distingue
+  // "no lo mandes" de "dejalo vacio": dentro del PATCH no habria forma de
+  // quitar todos los generos sin inventar un flag. Aqui la semantica es una
+  // sola y no hace falta.
+  rpc SetBookGenres(SetBookGenresRequest) returns (BookResponse) {
+    option (google.api.http) = {
+      put: "/v1/books/{book_id}/genres"
       body: "*"
-    };
-  }
-  rpc ListSavedBooks(ListSavedBooksRequest) returns (ListSavedBooksResponse) {
-    option (google.api.http) = {
-      get: "/v1/library"
-    };
-  }
-  // Si kind viene vacio, quita el libro de ambas categorias.
-  rpc UnsaveBook(UnsaveBookRequest) returns (DeleteResponse) {
-    option (google.api.http) = {
-      delete: "/v1/library/{book_id}"
     };
   }
 
   // --- interno: baja de cuenta -------------------------------------------
 
   // DeleteAuthorContent borra todo lo que cuelga de un usuario: sus libros
-  // (con sus capitulos), sus sagas y su biblioteca de lector. Lo llama
-  // user-service cuando alguien da de baja su cuenta, porque el CASCADE de
-  // Postgres no cruza de una base de datos a otra.
+  // (con sus capitulos y sus generos) y sus sagas. Lo llama user-service
+  // cuando alguien da de baja su cuenta, porque el CASCADE de Postgres no
+  // cruza de una base de datos a otra.
   //
   // Es idempotente: sobre un usuario que ya no tiene nada devuelve ceros.
   //
@@ -211,12 +231,34 @@ message Book {
   string status = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
-  // Cuantos capitulos tiene el libro. Sigue la misma regla de visibilidad que
-  // la lista de capitulos de GetBook: el autor cuenta todos los suyos, y
-  // cualquier otro solo los publicados. Si contara los borradores ajenos, el
-  // numero delataria obra inedita y no cuadraria con los capitulos que ese
-  // lector puede abrir.
+  // Cuantos capitulos PUBLICADOS tiene el libro, y es el mismo numero para
+  // todos: un borrador todavia no es parte del libro, es material que el autor
+  // no ha soltado. Asi chapter_count significa una sola cosa —cuanto hay para
+  // leer— y no cambia segun quien pregunte.
+  //
+  // Ojo: al autor, GetBook si le devuelve sus borradores en la lista de
+  // capitulos. Es a proposito, son dos preguntas distintas: cuanto hay
+  // publicado y que tiene escrito.
   int32 chapter_count = 9;
+  // Los generos del libro, entre 0 y 4. Se fijan al crearlo o con
+  // SetBookGenres; UpdateBook no los toca.
+  repeated Genre genres = 10;
+  // Cuando se publico por PRIMERA vez, ausente si nunca. Es lo que distingue un
+  // borrador recien escrito de uno que estuvo publicado y se retiro, y lo que
+  // sirve para ordenar novedades.
+  //
+  // No se borra al despublicar ni se pisa al volver a publicar: es la fecha en
+  // que la obra salio, no la del ultimo cambio de estado. Pisarla dejaria colar
+  // un libro viejo en las novedades con solo despublicarlo y republicarlo.
+  google.protobuf.Timestamp published_at = 11;
+}
+
+// Genre es una entrada del catalogo fijo de generos. slug es el identificador
+// estable (el que se manda al crear un libro o al filtrar un listado) y name la
+// etiqueta que se le muestra al lector.
+message Genre {
+  string slug = 1;
+  string name = 2;
 }
 
 // status: draft / published.
@@ -229,6 +271,9 @@ message Chapter {
   string status = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
+  // Misma regla que la del libro: la primera vez que se publico, ausente si
+  // nunca.
+  google.protobuf.Timestamp published_at = 9;
 }
 
 message Saga {
@@ -238,16 +283,6 @@ message Saga {
   string description = 4;
   google.protobuf.Timestamp created_at = 5;
   google.protobuf.Timestamp updated_at = 6;
-}
-
-// kind: favorite / read_later.
-message SavedBook {
-  string id = 1;
-  string user_id = 2;
-  string kind = 3;
-  google.protobuf.Timestamp created_at = 4;
-  // Datos del libro guardado, para que el cliente no tenga que pedirlo aparte.
-  Book book = 5;
 }
 
 // --- Libros ----------------------------------------------------------------
@@ -263,6 +298,9 @@ message CreateBookRequest {
   // CreateChapter. Reservado para que un cliente viejo no lo reutilice.
   reserved 5;
   reserved "first_chapter";
+  // Slugs del catalogo (ver ListGenres), maximo 4 y sin repetir. Opcional: un
+  // libro puede nacer sin generos y ponerselos despues con SetBookGenres.
+  repeated string genres = 6;
 }
 
 message ListBooksRequest {
@@ -275,16 +313,29 @@ message ListBooksRequest {
   string status = 4;
   // Busqueda por titulo (case-insensitive, subcadena).
   string search = 5;
+  // Filtra por un genero (su slug). Un libro entra si lo tiene entre los suyos.
+  string genre = 6;
 }
 
 // Sin campo author_id: el autor es siempre el dueno del token. Aceptarlo del
 // cliente seria justamente el agujero que este endpoint evita.
 message ListMyBooksRequest {
-  int32 page = 1;
-  int32 page_size = 2;
+  // El 1 y el 2 los ocupaban page y page_size: este listado ya no se pagina,
+  // devuelve todo. Reservados para que no se reutilicen; con la validacion de
+  // query params del gateway, un cliente viejo que siga mandando ?page= recibe
+  // un 400 que lo dice, en vez de que se ignore en silencio.
+  reserved 1, 2;
+  reserved "page", "page_size";
   // Filtro opcional: draft / published / archived. Vacio trae los tres.
   string status = 3;
   string search = 4;
+  string genre = 5;
+}
+
+// Sin page ni page_size: aqui total es cuantos libros vienen, que son todos.
+message ListMyBooksResponse {
+  repeated Book books = 1;
+  int32 total = 2;
 }
 
 message ListBooksResponse {
@@ -310,6 +361,7 @@ message BookDetailResponse {
   repeated Chapter chapters = 2;
 }
 
+// Los generos no estan aqui: se cambian con SetBookGenres.
 message UpdateBookRequest {
   string id = 1;
   optional string title = 2;
@@ -332,7 +384,8 @@ message CreateChapterRequest {
   string book_id = 1;
   string title = 2;
   string content = 3;
-  // draft (por defecto) / published.
+  // draft (por defecto) / published. published solo se acepta si el libro ya
+  // esta publicado.
   string status = 4;
   // Posicion deseada. Si se omite (o es 0), se agrega al final.
   int32 position = 5;
@@ -444,32 +497,20 @@ message ReorderSagaBooksRequest {
   repeated string book_ids = 2;
 }
 
-// --- Biblioteca del lector -------------------------------------------------
+// --- Generos ---------------------------------------------------------------
 
-message SaveBookRequest {
-  string book_id = 1;
-  // favorite / read_later.
-  string kind = 2;
-}
+message ListGenresRequest {}
 
-message ListSavedBooksRequest {
-  // Filtro opcional: sin kind devuelve favoritos y read_later juntos.
-  string kind = 1;
-}
-
-message ListSavedBooksResponse {
-  repeated SavedBook saved_books = 1;
+message ListGenresResponse {
+  repeated Genre genres = 1;
   int32 total = 2;
 }
 
-message UnsaveBookRequest {
+// genres reemplaza la lista entera: lo que no venga, se quita. Maximo 4 y sin
+// repetir.
+message SetBookGenresRequest {
   string book_id = 1;
-  // Opcional: sin kind quita el libro de ambas categorias.
-  string kind = 2;
-}
-
-message SavedBookResponse {
-  SavedBook saved_book = 1;
+  repeated string genres = 2;
 }
 
 // --- Baja de cuenta --------------------------------------------------------
@@ -483,5 +524,9 @@ message DeleteAuthorContentRequest {
 message DeleteAuthorContentResponse {
   int32 books_deleted = 1;
   int32 sagas_deleted = 2;
-  int32 saved_books_deleted = 3;
+  // El 3 lo ocupaba saved_books_deleted, de la biblioteca del lector que salio
+  // de este servicio. Reservado para que el numero no se reutilice: el mismo
+  // contrato lo compila user-service por su lado.
+  reserved 3;
+  reserved "saved_books_deleted";
 }

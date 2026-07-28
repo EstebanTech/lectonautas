@@ -1,0 +1,3 @@
+-- No hay vuelta atras: las tablas de reader se fueron a otro servicio, con sus
+-- datos. Recrear aqui el esquema vacio no devolveria nada y dejaria dos duenos
+-- para la misma informacion.

@@ -33,15 +33,21 @@ func (s *LibraryService) CreateBook(ctx context.Context, req *libraryv1.CreateBo
 		return nil, err
 	}
 
-	title, err := requiredText("title", req.GetTitle(), titleMaxLen)
+	title, err := titleField.Required(req.GetTitle())
 	if err != nil {
 		return nil, err
 	}
-	description, err := optionalText("description", req.GetDescription(), descriptionMaxLen)
+	description, err := descriptionField.Optional(req.GetDescription())
 	if err != nil {
 		return nil, err
 	}
-	coverURL, err := optionalText("cover_url", req.GetCoverUrl(), coverURLMaxLen)
+	coverURL, err := coverURLField.Optional(req.GetCoverUrl())
+	if err != nil {
+		return nil, err
+	}
+	// Los generos son opcionales al crear: el libro puede nacer sin ninguno y
+	// ponerselos despues con SetBookGenres.
+	genres, err := validateGenres(req.GetGenres())
 	if err != nil {
 		return nil, err
 	}
@@ -67,12 +73,12 @@ func (s *LibraryService) CreateBook(ctx context.Context, req *libraryv1.CreateBo
 		Description: description,
 		CoverURL:    coverURL,
 		Status:      bookStatus,
-	})
+	}, genres)
 	if err != nil {
 		return nil, mapRepoErr(err, "failed to create book")
 	}
 
-	s.invalidate(ctx)
+	s.cache.Invalidate(ctx)
 
 	return &libraryv1.BookResponse{Book: bookToProto(created)}, nil
 }
@@ -89,19 +95,6 @@ func (s *LibraryService) ListBooks(ctx context.Context, req *libraryv1.ListBooks
 		return nil, err
 	}
 
-	// Sin ViewerID a proposito: este listado es la vista publica, y su
-	// chapter_count es el numero publico (solo capitulos publicados) para
-	// todos, tambien para el autor. La vista del autor sobre lo suyo es
-	// ListMyBooks, que si cuenta sus borradores. Ademas evita resolver el token
-	// contra user-service en un endpoint que hoy no lo necesita.
-	filter := normalizePagination(domain.BookFilter{
-		Page:     req.GetPage(),
-		PageSize: req.GetPageSize(),
-		AuthorID: authorID,
-		Search:   req.GetSearch(),
-		Status:   domain.BookStatusPublished,
-	})
-
 	// Se rechaza en vez de ignorarse: pedir draft aqui y recibir published sin
 	// aviso haria pensar que el autor no tiene borradores.
 	if st := req.GetStatus(); st != "" && st != domain.BookStatusPublished {
@@ -109,65 +102,20 @@ func (s *LibraryService) ListBooks(ctx context.Context, req *libraryv1.ListBooks
 			"this listing only returns published books; use GET /v1/books/mine to see your own drafts")
 	}
 
-	return s.listBooks(ctx, filter, "pub")
-}
+	// No se resuelve el token: este listado no lo necesita para nada. Filtra
+	// siempre por published y el chapter_count es el mismo numero para todos.
+	filter := domain.BookFilter{
+		AuthorID: authorID,
+		Search:   req.GetSearch(),
+		Genre:    optionalGenreFilter(req.GetGenre()),
+		Status:   domain.BookStatusPublished,
+	}
+	filter.Page, filter.PageSize = normalizePage(req.GetPage(), req.GetPageSize())
 
-// ListMyBooks devuelve los libros del autor autenticado en cualquier estado.
-//
-// El author_id sale del token y no de la peticion: no hay forma de pedir la
-// obra inedita de otro, ni equivocandose ni a proposito. Lo que el token
-// demuestra es que la sesion existe y sigue vigente (lo resuelve user-service,
-// unico dueno de esa tabla); si alguien roba un token valido, este endpoint no
-// puede distinguirlo del legitimo — de eso se encarga el logout, que revoca la
-// sesion.
-func (s *LibraryService) ListMyBooks(ctx context.Context, req *libraryv1.ListMyBooksRequest) (*libraryv1.ListBooksResponse, error) {
-	authorID, err := s.auth.Require(ctx)
+	books, total, err := s.queryBooks(ctx, filter, scopePublic)
 	if err != nil {
 		return nil, err
 	}
-
-	// Aqui todos los libros son del llamante, asi que el conteo incluye sus
-	// capitulos en borrador: es su propio escritorio.
-	filter := normalizePagination(domain.BookFilter{
-		Page:     req.GetPage(),
-		PageSize: req.GetPageSize(),
-		AuthorID: authorID,
-		Search:   req.GetSearch(),
-		ViewerID: authorID,
-	})
-
-	// Sobre lo propio status es un filtro libre; vacio trae los tres estados.
-	if req.GetStatus() != "" {
-		if filter.Status, err = validateBookStatus(req.GetStatus()); err != nil {
-			return nil, err
-		}
-	}
-
-	return s.listBooks(ctx, filter, "own")
-}
-
-// listBooks es el cuerpo comun de los dos listados. El scope entra en la clave
-// de cache para que la version del autor y la publica nunca se pisen.
-func (s *LibraryService) listBooks(ctx context.Context, filter domain.BookFilter, scope string) (*libraryv1.ListBooksResponse, error) {
-	var cached cachedBookList
-	key, hit := s.cacheGet(ctx, &cached, "books",
-		scope, filter.AuthorID, filter.Status, filter.Search,
-		cache.FormatInt(filter.Page), cache.FormatInt(filter.PageSize))
-	if hit {
-		return &libraryv1.ListBooksResponse{
-			Books:    booksToProto(cached.Books),
-			Total:    cached.Total,
-			Page:     filter.Page,
-			PageSize: filter.PageSize,
-		}, nil
-	}
-
-	books, total, err := s.books.List(ctx, filter)
-	if err != nil {
-		return nil, mapRepoErr(err, "failed to list books")
-	}
-
-	s.cacheSet(ctx, key, cachedBookList{Books: books, Total: total})
 
 	return &libraryv1.ListBooksResponse{
 		Books:    booksToProto(books),
@@ -177,17 +125,76 @@ func (s *LibraryService) listBooks(ctx context.Context, filter domain.BookFilter
 	}, nil
 }
 
-func normalizePagination(f domain.BookFilter) domain.BookFilter {
-	if f.Page < 1 {
-		f.Page = 1
+// ListMyBooks devuelve los libros del autor autenticado en cualquier estado y
+// TODOS de una vez: este listado no se pagina.
+//
+// Es la unica lectura sin tope de tamano del servicio, y se lo permite porque
+// lo que devuelve esta acotado por naturaleza: son los libros que una persona
+// escribio, no un catalogo que crece con los usuarios. El listado publico, que
+// si crece sin limite, sigue paginado.
+//
+// El author_id sale del token y no de la peticion: no hay forma de pedir la
+// obra inedita de otro, ni equivocandose ni a proposito. Lo que el token
+// demuestra es que la sesion existe y sigue vigente (lo resuelve user-service,
+// unico dueno de esa tabla); si alguien roba un token valido, este endpoint no
+// puede distinguirlo del legitimo — de eso se encarga el logout, que revoca la
+// sesion.
+func (s *LibraryService) ListMyBooks(ctx context.Context, req *libraryv1.ListMyBooksRequest) (*libraryv1.ListMyBooksResponse, error) {
+	authorID, err := s.auth.Require(ctx)
+	if err != nil {
+		return nil, err
 	}
-	if f.PageSize < 1 {
-		f.PageSize = defaultPageSize
+
+	// Sin Page ni PageSize: el cero es lo que le dice al repositorio que saque
+	// la consulta sin LIMIT.
+	filter := domain.BookFilter{
+		AuthorID: authorID,
+		Search:   req.GetSearch(),
+		Genre:    optionalGenreFilter(req.GetGenre()),
 	}
-	if f.PageSize > maxPageSize {
-		f.PageSize = maxPageSize
+
+	// Sobre lo propio status es un filtro libre; vacio trae los tres estados.
+	if req.GetStatus() != "" {
+		if filter.Status, err = validateBookStatus(req.GetStatus()); err != nil {
+			return nil, err
+		}
 	}
-	return f
+
+	books, total, err := s.queryBooks(ctx, filter, scopeOwner)
+	if err != nil {
+		return nil, err
+	}
+
+	return &libraryv1.ListMyBooksResponse{
+		Books: booksToProto(books),
+		Total: total,
+	}, nil
+}
+
+// queryBooks es el cuerpo comun de los dos listados: consulta cacheada. Cada
+// uno le da forma a su respuesta por su cuenta, porque el publico lleva los
+// datos de la pagina y el propio no.
+//
+// El scope entra en la clave de cache para que la version del autor y la
+// publica nunca se pisen; la paginacion tambien, y en el listado sin paginar
+// entra como el cero que la representa.
+func (s *LibraryService) queryBooks(ctx context.Context, filter domain.BookFilter, scope string) ([]*domain.Book, int32, error) {
+	var cached cachedBookList
+	key, hit := s.cache.Get(ctx, &cached, "books",
+		scope, filter.AuthorID, filter.Status, filter.Search, filter.Genre,
+		cache.FormatInt(filter.Page), cache.FormatInt(filter.PageSize))
+	if hit {
+		return cached.Books, cached.Total, nil
+	}
+
+	books, total, err := s.books.List(ctx, filter)
+	if err != nil {
+		return nil, 0, mapRepoErr(err, "failed to list books")
+	}
+
+	s.cache.Set(ctx, key, cachedBookList{Books: books, Total: total})
+
+	return books, total, nil
 }
 
 // GetBook devuelve el libro con sus capitulos. Un lector ajeno solo ve el libro
@@ -204,24 +211,39 @@ func (s *LibraryService) GetBook(ctx context.Context, req *libraryv1.GetBookRequ
 		return nil, err
 	}
 
-	// La visibilidad se resuelve contra la BD antes de mirar el cache: es lo
-	// que decide cual de las dos versiones cacheadas corresponde servir.
+	// Se prueba primero la version publica del detalle. Si esta cacheada y quien
+	// pregunta no es su autor, esa es exactamente la que le toca y no hace falta
+	// tocar Postgres ni siquiera para comprobar la visibilidad: una entrada
+	// publica solo se escribe cuando el libro estaba publicado, y cualquier
+	// escritura posterior —incluida la que lo despublicaria— habria movido el
+	// contador de version que la clave lleva dentro, dejandola inalcanzable.
+	//
+	// Antes la visibilidad se resolvia siempre contra la BD ANTES de mirar el
+	// cache, asi que la lectura mas frecuente del servicio (un lector abriendo
+	// un libro ajeno) pagaba una consulta aunque el cache estuviera caliente.
+	var pub cachedBookDetail
+	pubKey, hit := s.cache.Get(ctx, &pub, "book", id, scopePublic)
+	if hit && pub.Book != nil && pub.Book.AuthorID != callerID {
+		return bookDetail(pub.Book, pub.Chapters), nil
+	}
+
+	// O pregunta el autor por lo suyo, o no habia nada cacheado: en ambos casos
+	// hay que resolver la visibilidad contra la BD.
 	book, isAuthor, err := s.visibleBook(ctx, id, callerID)
 	if err != nil {
 		return nil, err
 	}
 
-	scope := "pub"
+	key := pubKey
 	if isAuthor {
-		scope = "own"
-	}
-	var cached cachedBookDetail
-	key, hit := s.cacheGet(ctx, &cached, "book", id, scope)
-	if hit {
-		return &libraryv1.BookDetailResponse{
-			Book:     bookToProto(cached.Book),
-			Chapters: chaptersToProto(cached.Chapters),
-		}, nil
+		// La vista del autor va en su propia clave, porque incluye los capitulos
+		// en borrador que nadie mas puede ver.
+		var own cachedBookDetail
+		ownKey, ownHit := s.cache.Get(ctx, &own, "book", id, scopeOwner)
+		if ownHit && own.Book != nil {
+			return bookDetail(own.Book, own.Chapters), nil
+		}
+		key = ownKey
 	}
 
 	chapters, err := s.chapters.ListByBook(ctx, id, !isAuthor)
@@ -229,37 +251,33 @@ func (s *LibraryService) GetBook(ctx context.Context, req *libraryv1.GetBookRequ
 		return nil, mapRepoErr(err, "failed to load chapters")
 	}
 
-	s.cacheSet(ctx, key, cachedBookDetail{Book: book, Chapters: chapters})
+	s.cache.Set(ctx, key, cachedBookDetail{Book: book, Chapters: chapters})
 
+	return bookDetail(book, chapters), nil
+}
+
+func bookDetail(book *domain.Book, chapters []*domain.Chapter) *libraryv1.BookDetailResponse {
 	return &libraryv1.BookDetailResponse{
 		Book:     bookToProto(book),
 		Chapters: chaptersToProto(chapters),
-	}, nil
+	}
 }
 
 func (s *LibraryService) UpdateBook(ctx context.Context, req *libraryv1.UpdateBookRequest) (*libraryv1.BookResponse, error) {
-	id, err := requiredID("id", req.GetId())
+	book, _, err := s.requireOwnedBook(ctx, "id", req.GetId())
 	if err != nil {
 		return nil, err
 	}
 
-	callerID, err := s.auth.Require(ctx)
+	title, err := titleField.UpdateRequired(req.Title)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.ownedBook(ctx, id, callerID); err != nil {
-		return nil, err
-	}
-
-	title, err := validateRequiredUpdate("title", req.Title, titleMaxLen)
+	description, err := descriptionField.Update(req.Description)
 	if err != nil {
 		return nil, err
 	}
-	description, err := validateOptionalText("description", req.Description, descriptionMaxLen)
-	if err != nil {
-		return nil, err
-	}
-	coverURL, err := validateOptionalText("cover_url", req.CoverUrl, coverURLMaxLen)
+	coverURL, err := coverURLField.Update(req.CoverUrl)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +292,7 @@ func (s *LibraryService) UpdateBook(ctx context.Context, req *libraryv1.UpdateBo
 		// aqui es donde se exige que ya no este vacio. Un libro sin capitulos
 		// se queda en borrador, no hay forma de sacarlo de ahi.
 		if st == domain.BookStatusPublished {
-			chapters, err := s.chapterCount(ctx, id)
+			chapters, err := s.chapterCount(ctx, book.ID)
 			if err != nil {
 				return nil, err
 			}
@@ -287,7 +305,7 @@ func (s *LibraryService) UpdateBook(ctx context.Context, req *libraryv1.UpdateBo
 	}
 
 	updated, err := s.books.Update(ctx, &domain.BookUpdate{
-		ID:          id,
+		ID:          book.ID,
 		Title:       title,
 		Description: description,
 		CoverURL:    coverURL,
@@ -297,7 +315,7 @@ func (s *LibraryService) UpdateBook(ctx context.Context, req *libraryv1.UpdateBo
 		return nil, mapRepoErr(err, "failed to update book")
 	}
 
-	s.invalidate(ctx)
+	s.cache.Invalidate(ctx)
 
 	return &libraryv1.BookResponse{Book: bookToProto(updated)}, nil
 }
@@ -305,24 +323,17 @@ func (s *LibraryService) UpdateBook(ctx context.Context, req *libraryv1.UpdateBo
 // DeleteBook borra el libro entero. Sus capitulos, sus vinculos con sagas y las
 // entradas que tuviera en la biblioteca de los lectores se van por CASCADE.
 func (s *LibraryService) DeleteBook(ctx context.Context, req *libraryv1.DeleteBookRequest) (*libraryv1.DeleteResponse, error) {
-	id, err := requiredID("id", req.GetId())
+	book, _, err := s.requireOwnedBook(ctx, "id", req.GetId())
 	if err != nil {
 		return nil, err
 	}
 
-	callerID, err := s.auth.Require(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := s.ownedBook(ctx, id, callerID); err != nil {
-		return nil, err
-	}
-
-	if err := s.books.Delete(ctx, id); err != nil {
+	if err := s.books.Delete(ctx, book.ID); err != nil {
 		return nil, mapRepoErr(err, "failed to delete book")
 	}
 
-	s.invalidate(ctx)
+	s.cache.Invalidate(ctx)
+	s.dropInteractions(ctx, book.ID)
 
 	return &libraryv1.DeleteResponse{Success: true}, nil
 }

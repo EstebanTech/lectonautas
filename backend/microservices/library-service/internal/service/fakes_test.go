@@ -2,7 +2,9 @@ package service
 
 import (
 	"context"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -84,23 +86,21 @@ type fakeBookRepo struct {
 	// chapters lo enlaza newTestService para poder calcular ChapterCount igual
 	// que lo hace la subconsulta real.
 	chapters *fakeChapterRepo
+	// getByIDCalls cuenta los viajes a la "BD". Es lo unico con lo que se puede
+	// afirmar que una lectura servida desde el cache de verdad no consulto.
+	getByIDCalls int
 }
 
-// countChapters replica chapterCountExpr: el autor cuenta todos sus capitulos,
-// cualquier otro solo los publicados.
-func (r *fakeBookRepo) countChapters(bookID, viewerID string) int32 {
+// countChapters replica chapterCountExpr: solo los publicados, para todos por
+// igual.
+func (r *fakeBookRepo) countChapters(bookID string) int32 {
 	if r.chapters == nil {
 		return 0
 	}
-	book := r.books[bookID]
-	isAuthor := book != nil && viewerID != "" && book.AuthorID == viewerID
 
 	n := int32(0)
 	for _, ch := range r.chapters.chapters {
-		if ch.BookID != bookID {
-			continue
-		}
-		if isAuthor || ch.Status == domain.ChapterStatusPublished {
+		if ch.BookID == bookID && ch.Status == domain.ChapterStatusPublished {
 			n++
 		}
 	}
@@ -109,28 +109,40 @@ func (r *fakeBookRepo) countChapters(bookID, viewerID string) int32 {
 
 // withCount devuelve una copia con el conteo ya resuelto: el repositorio real
 // tampoco guarda ese numero en la fila, lo calcula en cada consulta.
-func (r *fakeBookRepo) withCount(b *domain.Book, viewerID string) *domain.Book {
+func (r *fakeBookRepo) withCount(b *domain.Book) *domain.Book {
 	out := *b
-	out.ChapterCount = r.countChapters(b.ID, viewerID)
+	out.ChapterCount = r.countChapters(b.ID)
 	return &out
 }
 
-func (r *fakeBookRepo) Create(_ context.Context, b *domain.Book) (*domain.Book, error) {
+// Create resuelve los generos contra el catalogo del doble, igual que el
+// repositorio real contra la FK: un slug que no esta hace fallar el alta entera.
+func (r *fakeBookRepo) Create(_ context.Context, b *domain.Book, genres []string) (*domain.Book, error) {
+	resolved, err := resolveGenres(genres)
+	if err != nil {
+		return nil, err
+	}
+
 	b.ID = newBookID
 	b.CreatedAt = time.Now()
 	b.UpdatedAt = b.CreatedAt
+	b.Genres = resolved
 	r.books[b.ID] = b
 	return b, nil
 }
 
-func (r *fakeBookRepo) GetByID(_ context.Context, id, viewerID string) (*domain.Book, error) {
+func (r *fakeBookRepo) GetByID(_ context.Context, id string) (*domain.Book, error) {
+	r.getByIDCalls++
 	b, ok := r.books[id]
 	if !ok {
 		return nil, repository.ErrBookNotFound
 	}
-	return r.withCount(b, viewerID), nil
+	return r.withCount(b), nil
 }
 
+// List modela tambien el recorte por pagina, porque de eso depende la
+// diferencia entre los dos listados: el publico pagina y el de lo propio no.
+// total es siempre cuantos cumplen el filtro, no cuantos trae la pagina.
 func (r *fakeBookRepo) List(_ context.Context, f domain.BookFilter) ([]*domain.Book, int32, error) {
 	out := make([]*domain.Book, 0)
 	for _, b := range r.books {
@@ -140,9 +152,26 @@ func (r *fakeBookRepo) List(_ context.Context, f domain.BookFilter) ([]*domain.B
 		if f.Status != "" && b.Status != f.Status {
 			continue
 		}
-		out = append(out, r.withCount(b, f.ViewerID))
+		out = append(out, r.withCount(b))
 	}
-	return out, int32(len(out)), nil
+	// El mapa no tiene orden; el repositorio real ordena por created_at. Aqui
+	// alcanza con que el recorte sea reproducible.
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+
+	total := int32(len(out))
+	// PageSize en 0 es "todo, sin LIMIT", igual que en la consulta real.
+	if f.PageSize > 0 {
+		desde := (f.Page - 1) * f.PageSize
+		if desde > total {
+			desde = total
+		}
+		hasta := desde + f.PageSize
+		if hasta > total {
+			hasta = total
+		}
+		out = out[desde:hasta]
+	}
+	return out, total, nil
 }
 
 func (r *fakeBookRepo) Update(_ context.Context, upd *domain.BookUpdate) (*domain.Book, error) {
@@ -155,9 +184,13 @@ func (r *fakeBookRepo) Update(_ context.Context, upd *domain.BookUpdate) (*domai
 	}
 	if upd.Status != nil {
 		b.Status = *upd.Status
+		// Igual que en los capitulos: replica el COALESCE del repositorio.
+		if *upd.Status == domain.BookStatusPublished && b.PublishedAt == nil {
+			ahora := time.Now()
+			b.PublishedAt = &ahora
+		}
 	}
-	// Al Update solo llega el autor, que cuenta todos sus capitulos.
-	return r.withCount(b, b.AuthorID), nil
+	return r.withCount(b), nil
 }
 
 func (r *fakeBookRepo) Delete(_ context.Context, id string) error {
@@ -168,10 +201,21 @@ func (r *fakeBookRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
+func (r *fakeBookRepo) IDsByAuthor(_ context.Context, authorID string) ([]string, error) {
+	ids := make([]string, 0)
+	for id, b := range r.books {
+		if b.AuthorID == authorID {
+			ids = append(ids, id)
+		}
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
 // DeleteByAuthor imita el borrado en cascada de la baja de cuenta. El conteo de
-// sagas y guardados no lo modela: lo que importa aqui es que los libros del
-// autor desaparezcan y los ajenos no.
-func (r *fakeBookRepo) DeleteByAuthor(_ context.Context, authorID string) (int32, int32, int32, error) {
+// sagas no lo modela: lo que importa aqui es que los libros del autor
+// desaparezcan y los ajenos no.
+func (r *fakeBookRepo) DeleteByAuthor(_ context.Context, authorID string) (int32, int32, error) {
 	borrados := int32(0)
 	for id, b := range r.books {
 		if b.AuthorID == authorID {
@@ -179,7 +223,7 @@ func (r *fakeBookRepo) DeleteByAuthor(_ context.Context, authorID string) (int32
 			borrados++
 		}
 	}
-	return borrados, 0, 0, nil
+	return borrados, 0, nil
 }
 
 type fakeChapterRepo struct {
@@ -229,6 +273,12 @@ func (r *fakeChapterRepo) Update(_ context.Context, upd *domain.ChapterUpdate) (
 	// capitulo publicado.
 	if upd.Status != nil {
 		ch.Status = *upd.Status
+		// Replica el COALESCE del repositorio: la fecha se escribe la primera
+		// vez y no se pisa despues.
+		if *upd.Status == domain.ChapterStatusPublished && ch.PublishedAt == nil {
+			ahora := time.Now()
+			ch.PublishedAt = &ahora
+		}
 	}
 	return ch, nil
 }
@@ -316,38 +366,70 @@ func (r *fakeSagaRepo) Delete(_ context.Context, id string) error {
 	return nil
 }
 
-func (r *fakeSagaRepo) ListBooks(context.Context, string, string) ([]*domain.Book, error) {
+func (r *fakeSagaRepo) ListBooks(context.Context, string) ([]*domain.Book, error) {
 	return []*domain.Book{}, nil
 }
 func (r *fakeSagaRepo) AddBook(context.Context, string, string, int32) error { return nil }
 func (r *fakeSagaRepo) RemoveBook(context.Context, string, string) error     { return nil }
 func (r *fakeSagaRepo) ReorderBooks(context.Context, string, []string) error { return nil }
 
-type fakeSavedRepo struct {
-	saved []*domain.SavedBook
+// catalogo es el equivalente en memoria de content.genres: la lista cerrada
+// contra la que se resuelven los slugs. No hace falta que sea la real, solo que
+// tenga mas de cuatro entradas para poder pasarse del tope.
+var catalogo = []*domain.Genre{
+	{Slug: "fantasy", Name: "Fantasía"},
+	{Slug: "horror", Name: "Terror"},
+	{Slug: "romance", Name: "Romance"},
+	{Slug: "drama", Name: "Drama"},
+	{Slug: "comedy", Name: "Comedia"},
 }
 
-func (r *fakeSavedRepo) Save(_ context.Context, userID, bookID, kind string) (*domain.SavedBook, error) {
-	sb := &domain.SavedBook{ID: "saved-1", UserID: userID, Kind: kind, Book: &domain.Book{ID: bookID}}
-	r.saved = append(r.saved, sb)
-	return sb, nil
-}
-
-func (r *fakeSavedRepo) ListByUser(_ context.Context, userID, kind string) ([]*domain.SavedBook, error) {
-	out := make([]*domain.SavedBook, 0)
-	for _, sb := range r.saved {
-		if sb.UserID != userID {
-			continue
+// resolveGenres hace lo que la FK contra content.genres: un slug fuera del
+// catalogo no se escribe, devuelve ErrGenreNotFound.
+func resolveGenres(slugs []string) ([]*domain.Genre, error) {
+	out := make([]*domain.Genre, 0, len(slugs))
+	for _, slug := range slugs {
+		encontrado := false
+		for _, g := range catalogo {
+			if g.Slug == slug {
+				out = append(out, g)
+				encontrado = true
+				break
+			}
 		}
-		if kind != "" && sb.Kind != kind {
-			continue
+		if !encontrado {
+			return nil, repository.ErrGenreNotFound
 		}
-		out = append(out, sb)
+	}
+	// El trigger de la BD es la ultima palabra sobre el tope, aunque al doble
+	// solo se llegue con listas que el servicio ya valido.
+	if len(out) > domain.GenreMaxPerBook {
+		return nil, repository.ErrTooManyGenres
 	}
 	return out, nil
 }
 
-func (r *fakeSavedRepo) Unsave(_ context.Context, userID, bookID, kind string) error {
+type fakeGenreRepo struct {
+	// books lo enlaza newTestService: escribir los generos tiene que verse en la
+	// siguiente lectura del libro, que es de donde SetBookGenres saca lo que
+	// devuelve.
+	books *fakeBookRepo
+}
+
+func (r *fakeGenreRepo) List(context.Context) ([]*domain.Genre, error) {
+	return catalogo, nil
+}
+
+func (r *fakeGenreRepo) ReplaceForBook(_ context.Context, bookID string, slugs []string) error {
+	resolved, err := resolveGenres(slugs)
+	if err != nil {
+		return err
+	}
+	b, ok := r.books.books[bookID]
+	if !ok {
+		return repository.ErrBookNotFound
+	}
+	b.Genres = resolved
 	return nil
 }
 
@@ -371,14 +453,54 @@ func newTestService(a Authenticator) (*LibraryService, *noopCache) {
 		sagaID: {ID: sagaID, AuthorID: authorID, Title: "Saga"},
 	}}
 	c := &noopCache{}
-	return NewLibraryService(books, chapters, sagas, &fakeSavedRepo{}, c, a), c
+	svc := NewLibraryService(books, chapters, sagas, &fakeGenreRepo{books: books}, c, a, &fakeInteractions{})
+	return svc, c
+}
+
+// fakeInteractions registra a que libros se les pidio limpiar las
+// interacciones, para poder afirmar que borrar un libro se las lleva.
+//
+// Lleva mutex porque la baja de cuenta pide las limpiezas en paralelo: el doble
+// tiene que aguantar lo mismo que aguanta el cliente gRPC real. Por eso mismo el
+// orden de `cleaned` no significa nada y las pruebas no deben afirmarlo.
+type fakeInteractions struct {
+	mu      sync.Mutex
+	cleaned []string
+	err     error
+}
+
+func (f *fakeInteractions) DeleteBookInteractions(_ context.Context, bookID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	if f.err != nil {
+		return f.err
+	}
+	f.cleaned = append(f.cleaned, bookID)
+	return nil
 }
 
 // draftBook agrega un libro en borrador del autor al escenario.
 func draftBook(s *LibraryService) string {
+	return bookConEstado(s, domain.BookStatusDraft)
+}
+
+// bookConEstado agrega al escenario un libro del autor en el estado que se pida.
+// Es lo que necesitan las pruebas de la regla de publicacion de capitulos, que
+// tienen que probar los tres estados del libro.
+func bookConEstado(s *LibraryService, estado string) string {
 	const id = "77777777-7777-7777-7777-777777777777"
 	s.books.(*fakeBookRepo).books[id] = &domain.Book{
-		ID: id, AuthorID: authorID, Title: "Borrador", Status: domain.BookStatusDraft,
+		ID: id, AuthorID: authorID, Title: "Otro libro", Status: estado,
+	}
+	return id
+}
+
+// capituloDe cuelga un capitulo del libro que se le indique y devuelve su id.
+func capituloDe(s *LibraryService, bookID, estado string) string {
+	const id = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	s.chapters.(*fakeChapterRepo).chapters[id] = &domain.Chapter{
+		ID: id, BookID: bookID, Title: "Capitulo", Position: 1, Status: estado,
 	}
 	return id
 }

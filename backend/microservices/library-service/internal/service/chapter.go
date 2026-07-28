@@ -10,25 +10,26 @@ import (
 	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
 )
 
+// cachedChapter es lo que se guarda en Valkey para GetChapter. Lleva el
+// author_id del libro, que no esta en el capitulo: es lo que permite decidir,
+// con la entrada cacheada en la mano, si a quien pregunta le corresponde esta
+// version o hay que ir a la BD a resolver su alcance.
+type cachedChapter struct {
+	Chapter  *domain.Chapter `json:"chapter"`
+	AuthorID string          `json:"author_id"`
+}
+
 func (s *LibraryService) CreateChapter(ctx context.Context, req *libraryv1.CreateChapterRequest) (*libraryv1.ChapterResponse, error) {
-	bookID, err := requiredID("book_id", req.GetBookId())
+	book, _, err := s.requireOwnedBook(ctx, "book_id", req.GetBookId())
 	if err != nil {
 		return nil, err
 	}
 
-	callerID, err := s.auth.Require(ctx)
+	title, err := titleField.Required(req.GetTitle())
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.ownedBook(ctx, bookID, callerID); err != nil {
-		return nil, err
-	}
-
-	title, err := requiredText("title", req.GetTitle(), titleMaxLen)
-	if err != nil {
-		return nil, err
-	}
-	content, err := optionalText("content", req.GetContent(), contentMaxLen)
+	content, err := contentField.Optional(req.GetContent())
 	if err != nil {
 		return nil, err
 	}
@@ -39,13 +40,18 @@ func (s *LibraryService) CreateChapter(ctx context.Context, req *libraryv1.Creat
 			return nil, err
 		}
 	}
+	// Nacer publicado tampoco vale si el libro no lo esta: seria colar por el
+	// alta lo que UpdateChapter no deja hacer despues.
+	if err := requirePublishableChapter(book, chapterStatus); err != nil {
+		return nil, err
+	}
 
-	if req.GetPosition() < 0 {
-		return nil, status.Error(codes.InvalidArgument, "position must be greater than zero")
+	if err := requiredPosition(req.GetPosition()); err != nil {
+		return nil, err
 	}
 
 	created, err := s.chapters.Create(ctx, &domain.Chapter{
-		BookID:   bookID,
+		BookID:   book.ID,
 		Title:    title,
 		Content:  content,
 		Position: req.GetPosition(),
@@ -55,7 +61,7 @@ func (s *LibraryService) CreateChapter(ctx context.Context, req *libraryv1.Creat
 		return nil, mapRepoErr(err, "failed to create chapter")
 	}
 
-	s.invalidate(ctx)
+	s.cache.Invalidate(ctx)
 
 	return &libraryv1.ChapterResponse{Chapter: chapterToProto(created)}, nil
 }
@@ -76,19 +82,31 @@ func (s *LibraryService) GetChapter(ctx context.Context, req *libraryv1.GetChapt
 	if err != nil {
 		return nil, err
 	}
-	_, isAuthor, err := s.visibleBook(ctx, bookID, callerID)
+
+	// Mismo atajo que en GetBook, y aqui es el que mas rinde: abrir un capitulo
+	// es lo que mas se hace en el servicio. Una entrada publica solo se escribe
+	// cuando el libro y el capitulo estaban ambos publicados, y cualquier
+	// escritura posterior habria movido la version que la clave lleva dentro,
+	// asi que un acierto ya es prueba de que a un lector ajeno le toca ver esto.
+	var pub cachedChapter
+	pubKey, hit := s.cache.Get(ctx, &pub, "chapter", bookID, id, scopePublic)
+	if hit && pub.Chapter != nil && pub.AuthorID != callerID {
+		return &libraryv1.ChapterResponse{Chapter: chapterToProto(pub.Chapter)}, nil
+	}
+
+	book, isAuthor, err := s.visibleBook(ctx, bookID, callerID)
 	if err != nil {
 		return nil, err
 	}
 
-	scope := "pub"
+	key := pubKey
 	if isAuthor {
-		scope = "own"
-	}
-	var cached domain.Chapter
-	key, hit := s.cacheGet(ctx, &cached, "chapter", bookID, id, scope)
-	if hit {
-		return &libraryv1.ChapterResponse{Chapter: chapterToProto(&cached)}, nil
+		var own cachedChapter
+		ownKey, ownHit := s.cache.Get(ctx, &own, "chapter", bookID, id, scopeOwner)
+		if ownHit && own.Chapter != nil {
+			return &libraryv1.ChapterResponse{Chapter: chapterToProto(own.Chapter)}, nil
+		}
+		key = ownKey
 	}
 
 	chapter, err := s.chapters.GetByID(ctx, bookID, id)
@@ -99,13 +117,13 @@ func (s *LibraryService) GetChapter(ctx context.Context, req *libraryv1.GetChapt
 		return nil, status.Error(codes.NotFound, "chapter not found")
 	}
 
-	s.cacheSet(ctx, key, chapter)
+	s.cache.Set(ctx, key, cachedChapter{Chapter: chapter, AuthorID: book.AuthorID})
 
 	return &libraryv1.ChapterResponse{Chapter: chapterToProto(chapter)}, nil
 }
 
 func (s *LibraryService) UpdateChapter(ctx context.Context, req *libraryv1.UpdateChapterRequest) (*libraryv1.ChapterResponse, error) {
-	bookID, err := requiredID("book_id", req.GetBookId())
+	book, _, err := s.requireOwnedBook(ctx, "book_id", req.GetBookId())
 	if err != nil {
 		return nil, err
 	}
@@ -114,19 +132,11 @@ func (s *LibraryService) UpdateChapter(ctx context.Context, req *libraryv1.Updat
 		return nil, err
 	}
 
-	callerID, err := s.auth.Require(ctx)
+	title, err := titleField.UpdateRequired(req.Title)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.ownedBook(ctx, bookID, callerID); err != nil {
-		return nil, err
-	}
-
-	title, err := validateRequiredUpdate("title", req.Title, titleMaxLen)
-	if err != nil {
-		return nil, err
-	}
-	content, err := validateOptionalText("content", req.Content, contentMaxLen)
+	content, err := contentField.Update(req.Content)
 	if err != nil {
 		return nil, err
 	}
@@ -137,15 +147,19 @@ func (s *LibraryService) UpdateChapter(ctx context.Context, req *libraryv1.Updat
 		if err != nil {
 			return nil, err
 		}
-		// Despublicar un capitulo no vacia el libro: la fila sigue ahi. Es
-		// decision del autor tener un libro publicado cuyos capitulos aun no
-		// lo estan, asi que aqui no hay nada que impedir.
+		// Publicar exige que el libro ya este publicado. Al reves —despublicar—
+		// no tiene nada que impedir: la fila sigue ahi, el libro no se vacia, y
+		// es decision del autor tener un libro publicado con capitulos que
+		// todavia no lo estan.
+		if err := requirePublishableChapter(book, st); err != nil {
+			return nil, err
+		}
 		chapterStatus = &st
 	}
 
 	updated, err := s.chapters.Update(ctx, &domain.ChapterUpdate{
 		ID:      id,
-		BookID:  bookID,
+		BookID:  book.ID,
 		Title:   title,
 		Content: content,
 		Status:  chapterStatus,
@@ -154,7 +168,7 @@ func (s *LibraryService) UpdateChapter(ctx context.Context, req *libraryv1.Updat
 		return nil, mapRepoErr(err, "failed to update chapter")
 	}
 
-	s.invalidate(ctx)
+	s.cache.Invalidate(ctx)
 
 	return &libraryv1.ChapterResponse{Chapter: chapterToProto(updated)}, nil
 }
@@ -163,7 +177,7 @@ func (s *LibraryService) UpdateChapter(ctx context.Context, req *libraryv1.Updat
 // permite es dejar sin nada que leer a un libro ya publicado: para eso hay que
 // pasarlo antes a borrador (o archivarlo), que es una decision consciente.
 func (s *LibraryService) DeleteChapter(ctx context.Context, req *libraryv1.DeleteChapterRequest) (*libraryv1.DeleteResponse, error) {
-	bookID, err := requiredID("book_id", req.GetBookId())
+	book, _, err := s.requireOwnedBook(ctx, "book_id", req.GetBookId())
 	if err != nil {
 		return nil, err
 	}
@@ -172,18 +186,9 @@ func (s *LibraryService) DeleteChapter(ctx context.Context, req *libraryv1.Delet
 		return nil, err
 	}
 
-	callerID, err := s.auth.Require(ctx)
-	if err != nil {
-		return nil, err
-	}
-	book, err := s.ownedBook(ctx, bookID, callerID)
-	if err != nil {
-		return nil, err
-	}
-
 	// El capitulo tiene que existir antes de contar: si no, un id inventado
 	// sobre un libro con un solo capitulo daria "es el ultimo" en vez de 404.
-	if _, err := s.chapters.GetByID(ctx, bookID, id); err != nil {
+	if _, err := s.chapters.GetByID(ctx, book.ID, id); err != nil {
 		return nil, mapRepoErr(err, "failed to load chapter")
 	}
 
@@ -191,7 +196,7 @@ func (s *LibraryService) DeleteChapter(ctx context.Context, req *libraryv1.Delet
 	// porque quedaria a la vista sin nada dentro y sin forma de volver atras
 	// mas que despublicandolo.
 	if book.Status == domain.BookStatusPublished {
-		chapters, err := s.chapterCount(ctx, bookID)
+		chapters, err := s.chapterCount(ctx, book.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -201,11 +206,11 @@ func (s *LibraryService) DeleteChapter(ctx context.Context, req *libraryv1.Delet
 		}
 	}
 
-	if err := s.chapters.Delete(ctx, bookID, id); err != nil {
+	if err := s.chapters.Delete(ctx, book.ID, id); err != nil {
 		return nil, mapRepoErr(err, "failed to delete chapter")
 	}
 
-	s.invalidate(ctx)
+	s.cache.Invalidate(ctx)
 
 	return &libraryv1.DeleteResponse{Success: true}, nil
 }
@@ -213,42 +218,22 @@ func (s *LibraryService) DeleteChapter(ctx context.Context, req *libraryv1.Delet
 // ReorderChapters recibe todos los capitulos del libro en el orden deseado y
 // les reasigna position 1..N.
 func (s *LibraryService) ReorderChapters(ctx context.Context, req *libraryv1.ReorderChaptersRequest) (*libraryv1.ReorderChaptersResponse, error) {
-	bookID, err := requiredID("book_id", req.GetBookId())
+	book, _, err := s.requireOwnedBook(ctx, "book_id", req.GetBookId())
 	if err != nil {
-		return nil, err
-	}
-
-	callerID, err := s.auth.Require(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := s.ownedBook(ctx, bookID, callerID); err != nil {
 		return nil, err
 	}
 
 	ids := req.GetChapterIds()
-	if len(ids) == 0 {
-		return nil, status.Error(codes.InvalidArgument, "chapter_ids is required")
-	}
-	// Un id repetido dejaria capitulos sin posicion asignada y el conteo
-	// cuadraria igual, asi que se descarta aqui.
-	seen := make(map[string]struct{}, len(ids))
-	for _, id := range ids {
-		if id == "" {
-			return nil, status.Error(codes.InvalidArgument, "chapter_ids cannot contain empty values")
-		}
-		if _, dup := seen[id]; dup {
-			return nil, status.Error(codes.InvalidArgument, "chapter_ids cannot contain duplicates")
-		}
-		seen[id] = struct{}{}
+	if err := requiredIDs("chapter_ids", ids); err != nil {
+		return nil, err
 	}
 
-	chapters, err := s.chapters.Reorder(ctx, bookID, ids)
+	chapters, err := s.chapters.Reorder(ctx, book.ID, ids)
 	if err != nil {
 		return nil, mapRepoErr(err, "failed to reorder chapters")
 	}
 
-	s.invalidate(ctx)
+	s.cache.Invalidate(ctx)
 
 	return &libraryv1.ReorderChaptersResponse{Chapters: chaptersToProto(chapters)}, nil
 }

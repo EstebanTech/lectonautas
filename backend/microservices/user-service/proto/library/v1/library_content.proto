@@ -14,9 +14,9 @@ package library.v1;
 option go_package = "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/library/v1;libraryv1";
 
 service LibraryService {
-  // Borra los libros, sagas y guardados de un usuario que se da de baja. No
-  // tiene anotacion HTTP a proposito: se llama directo a library-service:50052,
-  // sin pasar por el gateway.
+  // Borra los libros y las sagas de un usuario que se da de baja. No tiene
+  // anotacion HTTP a proposito: se llama directo a library-service:50052, sin
+  // pasar por el gateway.
   rpc DeleteAuthorContent(DeleteAuthorContentRequest) returns (DeleteAuthorContentResponse);
 }
 
@@ -27,5 +27,8 @@ message DeleteAuthorContentRequest {
 message DeleteAuthorContentResponse {
   int32 books_deleted = 1;
   int32 sagas_deleted = 2;
-  int32 saved_books_deleted = 3;
+  // Reservado alla y aqui: el 3 era saved_books_deleted, de la biblioteca del
+  // lector que ya no vive en library-service.
+  reserved 3;
+  reserved "saved_books_deleted";
 }
