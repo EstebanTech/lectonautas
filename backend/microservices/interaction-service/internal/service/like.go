@@ -41,7 +41,7 @@ func (s *InteractionService) setLike(ctx context.Context, rawBookID string, like
 		summary, err = s.likes.Unlike(ctx, bookID, userID)
 	}
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to update like")
+		return nil, mapRepoErr(ctx, err, "failed to update like")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -87,7 +87,7 @@ func (s *InteractionService) likeSummary(ctx context.Context, bookID, viewerID s
 
 	summary, err := s.likes.Summary(ctx, bookID, viewerID)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load likes")
+		return nil, mapRepoErr(ctx, err, "failed to load likes")
 	}
 
 	s.cache.Set(ctx, key, summary)

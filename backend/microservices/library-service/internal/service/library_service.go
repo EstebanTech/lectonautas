@@ -2,14 +2,15 @@ package service
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"sync"
 
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/auth"
-	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/cache"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/interaction"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/repository"
 	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/shared/cache"
+	"github.com/EstebanTech/lectonautas/backend/shared/logx"
 )
 
 // Authenticator resuelve la identidad del llamante. Es una interfaz y no el
@@ -26,7 +27,7 @@ type Authenticator interface {
 
 // Cache es lo que el servicio necesita de Valkey. Igual que Authenticator, se
 // abstrae para poder probar sin dependencias externas. El servicio no lo usa
-// directo: lo envuelve cacheAside, que le pone la politica de fallos.
+// directo: lo envuelve cache.Aside, que le pone la politica de fallos.
 type Cache interface {
 	Key(ctx context.Context, parts ...string) (string, error)
 	Get(ctx context.Context, key string, dest any) error
@@ -47,7 +48,7 @@ type Interactions interface {
 // Las implementaciones reales tienen que seguir cumpliendo el contrato.
 var (
 	_ Authenticator = (*auth.Authenticator)(nil)
-	_ Cache         = (*cache.LibraryCache)(nil)
+	_ Cache         = (*cache.Versioned)(nil)
 	_ Interactions  = (*interaction.Client)(nil)
 )
 
@@ -57,7 +58,7 @@ var (
 //
 // Los handlers estan repartidos por entidad (book.go, chapter.go, saga.go,
 // genre.go, account.go); aqui queda el armado. Lo que comparten esta en sus
-// propios colaboradores: cacheAside para el cache, access.go para las reglas de
+// propios colaboradores: cache.Aside para el cache, access.go para las reglas de
 // propiedad y visibilidad, validation.go para los campos.
 type LibraryService struct {
 	libraryv1.UnimplementedLibraryServiceServer
@@ -65,7 +66,7 @@ type LibraryService struct {
 	chapters     repository.ChapterRepository
 	sagas        repository.SagaRepository
 	genres       repository.GenreRepository
-	cache        cacheAside
+	cache        cache.Aside
 	auth         Authenticator
 	interactions Interactions
 }
@@ -84,7 +85,7 @@ func NewLibraryService(
 		chapters:     chapters,
 		sagas:        sagas,
 		genres:       genres,
-		cache:        cacheAside{cache: libraryCache},
+		cache:        cache.NewAside(libraryCache),
 		auth:         authenticator,
 		interactions: interactions,
 	}
@@ -135,6 +136,8 @@ func (s *LibraryService) dropInteractions(ctx context.Context, bookIDs ...string
 
 func (s *LibraryService) dropBookInteractions(ctx context.Context, bookID string) {
 	if err := s.interactions.DeleteBookInteractions(ctx, bookID); err != nil {
-		log.Printf("delete book interactions failed (book %s): %v", bookID, err)
+		logx.From(ctx).Error("delete book interactions failed",
+			slog.String("book_id", bookID),
+			slog.String("error", err.Error()))
 	}
 }

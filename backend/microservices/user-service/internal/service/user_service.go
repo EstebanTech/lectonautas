@@ -11,25 +11,31 @@ import (
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/domain"
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/repository"
 	userv1 "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/user/v1"
+	sharedcache "github.com/EstebanTech/lectonautas/backend/shared/cache"
 )
 
-// SessionCache y UserCache son lo que el servicio necesita de Valkey. Son
+// SessionCache y Cache son lo que el servicio necesita de Valkey. Son
 // interfaces y no los tipos concretos para poder probar el cache-aside y la
 // invalidacion sin levantar Valkey, y para poder afirmar que una lectura
 // cacheada de verdad no toca la BD.
+//
+// Son dos y no una porque cachean cosas distintas con reglas distintas: los
+// datos de usuario caducan (frescura) y las sesiones se revocan (una entrada
+// concreta, al instante). Ver el comentario del paquete internal/cache.
 type SessionCache interface {
 	Set(ctx context.Context, tokenHash, userID string, ttl time.Duration) error
 	Get(ctx context.Context, tokenHash string) (string, error)
 	Delete(ctx context.Context, tokenHash string) error
 }
 
-type UserCache interface {
-	SetUser(ctx context.Context, u *domain.User, ttl time.Duration) error
-	GetUser(ctx context.Context, id string) (*domain.User, error)
-	SetAllUsers(ctx context.Context, users []*domain.User, ttl time.Duration) error
-	GetAllUsers(ctx context.Context) ([]*domain.User, error)
-	InvalidateUser(ctx context.Context, id string) error
-	InvalidateAllUsers(ctx context.Context) error
+// Cache es el cache versionado compartido, el mismo que usan library-service e
+// interaction-service: las claves llevan dentro un contador y cualquier
+// escritura lo incrementa, dejando lo viejo inalcanzable de golpe.
+type Cache interface {
+	Key(ctx context.Context, parts ...string) (string, error)
+	Get(ctx context.Context, key string, dest any) error
+	Set(ctx context.Context, key string, value any) error
+	Bump(ctx context.Context) error
 }
 
 // ContentDeleter borra en library-service todo lo que cuelga de un usuario. Es
@@ -57,7 +63,7 @@ type InteractionDeleter interface {
 // Las implementaciones reales tienen que seguir cumpliendo el contrato.
 var (
 	_ SessionCache = (*cache.SessionCache)(nil)
-	_ UserCache    = (*cache.UserCache)(nil)
+	_ Cache        = (*sharedcache.Versioned)(nil)
 )
 
 // UserService implementa la API del servicio. Los handlers no viven todos aqui:
@@ -69,7 +75,7 @@ type UserService struct {
 	repo         repository.UserRepository
 	sessions     repository.SessionRepository
 	cache        SessionCache
-	users        cachedUsers
+	users        sharedcache.Aside
 	content      ContentDeleter
 	interactions InteractionDeleter
 }
@@ -78,7 +84,7 @@ func NewUserService(
 	repo repository.UserRepository,
 	sessions repository.SessionRepository,
 	sessionCache SessionCache,
-	userCache UserCache,
+	userCache Cache,
 	content ContentDeleter,
 	interactions InteractionDeleter,
 ) *UserService {
@@ -86,7 +92,7 @@ func NewUserService(
 		repo:         repo,
 		sessions:     sessions,
 		cache:        sessionCache,
-		users:        cachedUsers{cache: userCache},
+		users:        sharedcache.NewAside(userCache),
 		content:      content,
 		interactions: interactions,
 	}
@@ -96,16 +102,18 @@ func NewUserService(
 // va a la BD y repuebla la clave. Lo comparten GetUser y GetCurrentUser, asi
 // que ambos aprovechan la misma entrada.
 func (s *UserService) userByID(ctx context.Context, id string) (*domain.User, error) {
-	if u, hit := s.users.user(ctx, id); hit {
-		return u, nil
+	var cached cachedUser
+	key, hit := s.users.Get(ctx, &cached, userKeyPart, id)
+	if hit {
+		return cached.toDomain(), nil
 	}
 
 	u, err := s.repo.GetByID(ctx, id)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to get user")
+		return nil, mapRepoErr(ctx, err, "failed to get user")
 	}
 
-	s.users.storeUser(ctx, u)
+	s.users.Set(ctx, key, toCached(u))
 	return u, nil
 }
 

@@ -11,9 +11,9 @@ import (
 	"context"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/shared/grpcx"
 )
 
 type Client struct {
@@ -24,8 +24,8 @@ type Client struct {
 // New abre la conexion a library-service. grpc.NewClient no conecta al vuelo: la
 // conexion se establece en la primera llamada, asi que arrancar antes que
 // library-service no es un problema.
-func New(addr string) (*Client, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+func New(addr, internalSecret string) (*Client, error) {
+	conn, err := grpcx.Dial(addr, internalSecret)
 	if err != nil {
 		return nil, err
 	}

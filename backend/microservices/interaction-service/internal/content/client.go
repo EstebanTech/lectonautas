@@ -11,10 +11,10 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
 	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/shared/grpcx"
 )
 
 // Publicado es el unico estado sobre el que se puede interactuar. Un borrador
@@ -37,8 +37,12 @@ type Client struct {
 // New abre la conexion a library-service. Como el resto de los clientes gRPC
 // del monorepo, no conecta al vuelo: la conexion se establece en la primera
 // llamada, asi que arrancar antes que library-service no rompe nada.
-func New(addr string) (*Client, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+//
+// El secreto compartido viaja igualmente, aunque GetBook sea un metodo publico:
+// lo que se le pide a library-service es lo que ve cualquiera, y por eso la
+// llamada sigue yendo sin token de sesion.
+func New(addr, internalSecret string) (*Client, error) {
+	conn, err := grpcx.Dial(addr, internalSecret)
 	if err != nil {
 		return nil, err
 	}

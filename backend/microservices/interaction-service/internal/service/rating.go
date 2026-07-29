@@ -29,7 +29,7 @@ func (s *InteractionService) RateBook(ctx context.Context, req *interactionv1.Ra
 
 	summary, err := s.ratings.Rate(ctx, bookID, userID, score)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to rate book")
+		return nil, mapRepoErr(ctx, err, "failed to rate book")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -56,12 +56,12 @@ func (s *InteractionService) DeleteRating(ctx context.Context, req *interactionv
 	// deshacerlo. Si el autor lo despublico despues, el lector tiene que poder
 	// retirar su nota igual.
 	if err := s.ratings.Delete(ctx, bookID, userID); err != nil {
-		return nil, mapRepoErr(err, "failed to delete rating")
+		return nil, mapRepoErr(ctx, err, "failed to delete rating")
 	}
 
 	summary, err := s.ratings.Summary(ctx, bookID, userID)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load rating")
+		return nil, mapRepoErr(ctx, err, "failed to load rating")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -101,7 +101,7 @@ func (s *InteractionService) ratingSummary(ctx context.Context, bookID, viewerID
 
 	summary, err := s.ratings.Summary(ctx, bookID, viewerID)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load rating")
+		return nil, mapRepoErr(ctx, err, "failed to load rating")
 	}
 
 	s.cache.Set(ctx, key, summary)

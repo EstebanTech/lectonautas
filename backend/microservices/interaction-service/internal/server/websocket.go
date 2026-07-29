@@ -3,7 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"time"
@@ -12,6 +12,7 @@ import (
 
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/domain"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/events"
+	"github.com/EstebanTech/lectonautas/backend/shared/logx"
 )
 
 // Tiempos del keepalive. El servidor manda un ping cada pingPeriod y espera el
@@ -104,12 +105,18 @@ func (h *WSHandler) serveBook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// El id de la peticion llega como cabecera HTTP normal (la pone Envoy) y no
+	// como metadata gRPC: esta ruta no pasa por el transcoder. Se mete en el
+	// contexto para que salga en el log de aqui y viaje a los vecinos en las
+	// llamadas de abajo.
+	ctx := logx.WithRequestID(r.Context(), r.Header.Get(logx.RequestIDKey))
+
 	// El token va en la query y no en un header porque la API de WebSocket del
 	// navegador no deja poner cabeceras en el handshake. Es opcional: el stream
 	// es publico y lo unico que aporta es rechazar a quien manda uno invalido en
 	// vez de degradarlo a anonimo en silencio.
 	if token := r.URL.Query().Get("token"); token != "" {
-		if _, err := h.tokens.ValidateToken(r.Context(), token); err != nil {
+		if _, err := h.tokens.ValidateToken(ctx, token); err != nil {
 			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
 			return
 		}
@@ -119,14 +126,14 @@ func (h *WSHandler) serveBook(w http.ResponseWriter, r *http.Request) {
 	// esta publicado responde un 404 HTTP normal, que el cliente entiende. Si se
 	// hiciera despues, tendria que cerrar un WebSocket ya abierto con un codigo
 	// de cierre, que es mucho mas dificil de diagnosticar desde el navegador.
-	if err := h.books.Exists(r.Context(), bookID); err != nil {
+	if err := h.books.Exists(ctx, bookID); err != nil {
 		http.Error(w, "book not found", http.StatusNotFound)
 		return
 	}
 
 	// El snapshot tambien se pide antes del upgrade, por lo mismo: si la base no
 	// responde, mejor un 503 que una conexion abierta que nunca dice nada.
-	snapshot, err := h.snapshots.Snapshot(r.Context(), bookID)
+	snapshot, err := h.snapshots.Snapshot(ctx, bookID)
 	if err != nil {
 		http.Error(w, "cannot load the current state", http.StatusServiceUnavailable)
 		return
@@ -135,7 +142,9 @@ func (h *WSHandler) serveBook(w http.ResponseWriter, r *http.Request) {
 	conn, err := h.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		// Upgrade ya respondio al cliente; aqui solo queda dejar rastro.
-		log.Printf("ws upgrade failed: %v", err)
+		logx.From(ctx).Warn("ws upgrade failed",
+			slog.String("book_id", bookID),
+			slog.String("error", err.Error()))
 		return
 	}
 	defer conn.Close()

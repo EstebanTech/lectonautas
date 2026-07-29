@@ -2,7 +2,8 @@ package config
 
 import (
 	"fmt"
-	"os"
+
+	"github.com/EstebanTech/lectonautas/backend/shared/config"
 )
 
 type Config struct {
@@ -20,6 +21,10 @@ type Config struct {
 	// Direccion gRPC de library-service, dueno de los libros: se le pregunta si
 	// el libro existe y esta publicado antes de aceptar una interaccion.
 	LibraryServiceAddr string
+	// InternalSecret autentica las llamadas de servicio a servicio, en los dos
+	// sentidos: se manda al llamar a un vecino y se exige en los metodos
+	// internos de este servicio (los dos borrados masivos).
+	InternalSecret string
 }
 
 // Load resuelve la configuración del servicio. Dentro de docker, el compose
@@ -27,26 +32,29 @@ type Config struct {
 // variables prefijadas del .env global de la raíz del monorepo.
 func Load() (*Config, error) {
 	cfg := &Config{
-		GRPCPort:           firstNonEmpty(os.Getenv("GRPC_PORT"), os.Getenv("INTERACTION_SERVICE_GRPC_PORT"), "50053"),
-		DatabaseURL:        firstNonEmpty(os.Getenv("DATABASE_URL"), os.Getenv("INTERACTION_SERVICE_DATABASE_URL")),
-		RedisAddr:          firstNonEmpty(os.Getenv("REDIS_ADDR"), os.Getenv("INTERACTION_SERVICE_REDIS_ADDR"), "localhost:6379"),
-		WSPort:             firstNonEmpty(os.Getenv("WS_PORT"), os.Getenv("INTERACTION_SERVICE_WS_PORT"), "8090"),
-		UserServiceAddr:    firstNonEmpty(os.Getenv("USER_SERVICE_ADDR"), "localhost:50051"),
-		LibraryServiceAddr: firstNonEmpty(os.Getenv("LIBRARY_SERVICE_ADDR"), "localhost:50052"),
+		GRPCPort:           config.Env("GRPC_PORT", "INTERACTION_SERVICE_GRPC_PORT"),
+		DatabaseURL:        config.Env("DATABASE_URL", "INTERACTION_SERVICE_DATABASE_URL"),
+		RedisAddr:          config.Env("REDIS_ADDR", "INTERACTION_SERVICE_REDIS_ADDR"),
+		WSPort:             config.Env("WS_PORT", "INTERACTION_SERVICE_WS_PORT"),
+		UserServiceAddr:    config.Env("USER_SERVICE_ADDR"),
+		LibraryServiceAddr: config.Env("LIBRARY_SERVICE_ADDR"),
 	}
+
+	cfg.GRPCPort = config.FirstNonEmpty(cfg.GRPCPort, "50053")
+	cfg.RedisAddr = config.FirstNonEmpty(cfg.RedisAddr, "localhost:6379")
+	cfg.WSPort = config.FirstNonEmpty(cfg.WSPort, "8090")
+	cfg.UserServiceAddr = config.FirstNonEmpty(cfg.UserServiceAddr, "localhost:50051")
+	cfg.LibraryServiceAddr = config.FirstNonEmpty(cfg.LibraryServiceAddr, "localhost:50052")
 
 	if cfg.DatabaseURL == "" {
 		return nil, fmt.Errorf("DATABASE_URL (or INTERACTION_SERVICE_DATABASE_URL) is required")
 	}
 
-	return cfg, nil
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if v != "" {
-			return v
-		}
+	secret, err := config.InternalSecret()
+	if err != nil {
+		return nil, err
 	}
-	return ""
+	cfg.InternalSecret = secret
+
+	return cfg, nil
 }

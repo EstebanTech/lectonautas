@@ -1,0 +1,74 @@
+# Limites del gateway. El dominio es el que declara el filtro ratelimit de
+# envoy.yaml, y es uno para todo el trafico HTTP: este archivo no es de un
+# servicio en particular (antes se llamaba user-service.yaml, que enganaba).
+#
+# Cada ruta de envoy.yaml manda dos entradas: la CLASE de ruta (generic_key
+# "route") y la IP del cliente. El limite se define entonces por clase, no
+# global: sin eso, un intento de login gastaba el mismo presupuesto que un GET
+# al catalogo de generos, que es una lista fija y cacheada.
+#
+# El limite es siempre por IP dentro de la clase (remote_address anidado), asi
+# que un cliente no puede consumir el presupuesto de otro.
+domain: gateway
+descriptors:
+  # Login. Es el unico endpoint donde un limite bajo hace de verdad algo: cada
+  # peticion es un intento de adivinar una credencial. 10/min por IP deja
+  # trabajar a una persona que se equivoca y corta cualquier prueba por fuerza
+  # bruta mucho antes de que llegue a ningun lado.
+  - key: route
+    value: auth
+    descriptors:
+      - key: remote_address
+        rate_limit:
+          unit: minute
+          requests_per_unit: 10
+
+  # Catalogo de generos: lista fija, publica y cacheada en Valkey. Sirve para
+  # pintar un selector, asi que el limite solo esta para que no sea un
+  # amplificador gratis.
+  - key: route
+    value: catalog
+    descriptors:
+      - key: remote_address
+        rate_limit:
+          unit: minute
+          requests_per_unit: 300
+
+  # Lecturas (GET de libros, sagas e interacciones). Un lector navegando abre
+  # muchas en poco tiempo —listado, ficha, comentarios, calificacion— y todas
+  # salen del cache; 200/min por IP no lo estorba y sigue acotando el scrapeo.
+  - key: route
+    value: read
+    descriptors:
+      - key: remote_address
+        rate_limit:
+          unit: minute
+          requests_per_unit: 200
+
+  # Handshakes de WebSocket. Lo que se limita es abrir la conexion, no lo que
+  # viaja despues: una vez abierta, el trafico no vuelve a pasar por aqui.
+  # Reconectar tras una caida de red es normal; hacerlo 30 veces por minuto no.
+  - key: route
+    value: ws
+    descriptors:
+      - key: remote_address
+        rate_limit:
+          unit: minute
+          requests_per_unit: 30
+
+  # Todo lo demas: escrituras (crear libro, comentar, calificar), el CRUD de
+  # usuarios y el resto de /v1/auth. Es el limite que antes aplicaba a todo.
+  - key: route
+    value: default
+    descriptors:
+      - key: remote_address
+        rate_limit:
+          unit: minute
+          requests_per_unit: 80
+
+  # Red de seguridad: una ruta nueva que se olvide de declarar su clase cae
+  # aqui en vez de quedar sin limite.
+  - key: remote_address
+    rate_limit:
+      unit: minute
+      requests_per_unit: 80

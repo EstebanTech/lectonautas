@@ -13,11 +13,11 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	userv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/user/v1"
+	"github.com/EstebanTech/lectonautas/backend/shared/grpcx"
 )
 
 type Authenticator struct {
@@ -25,11 +25,11 @@ type Authenticator struct {
 	client userv1.UserServiceClient
 }
 
-// New abre la conexion a user-service. grpc.NewClient no conecta al vuelo: la
-// conexion se establece en la primera llamada, asi que arrancar antes que
-// user-service no es un problema.
-func New(addr string) (*Authenticator, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+// New abre la conexion a user-service. La conexion es perezosa, asi que
+// arrancar antes que user-service no es un problema; el secreto viaja en cada
+// llamada porque ValidateSession es un metodo interno del vecino.
+func New(addr, internalSecret string) (*Authenticator, error) {
+	conn, err := grpcx.Dial(addr, internalSecret)
 	if err != nil {
 		return nil, err
 	}

@@ -22,7 +22,7 @@ func (s *LibraryService) ListGenres(ctx context.Context, _ *libraryv1.ListGenres
 	// agregue generos, el selector tarda como mucho ese TTL en verlos.
 	genres, err := s.genres.List(ctx)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to list genres")
+		return nil, mapRepoErr(ctx, err, "failed to list genres")
 	}
 
 	s.cache.Set(ctx, key, genres)
@@ -45,7 +45,7 @@ func (s *LibraryService) SetBookGenres(ctx context.Context, req *libraryv1.SetBo
 	}
 
 	if err := s.genres.ReplaceForBook(ctx, book.ID, genres); err != nil {
-		return nil, mapRepoErr(err, "failed to set book genres")
+		return nil, mapRepoErr(ctx, err, "failed to set book genres")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -54,7 +54,7 @@ func (s *LibraryService) SetBookGenres(ctx context.Context, req *libraryv1.SetBo
 	// la escritura solo conoce los slugs.
 	updated, err := s.books.GetByID(ctx, book.ID)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load book")
+		return nil, mapRepoErr(ctx, err, "failed to load book")
 	}
 
 	return &libraryv1.BookResponse{Book: bookToProto(updated)}, nil

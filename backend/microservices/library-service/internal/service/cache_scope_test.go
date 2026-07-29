@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/cache"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
 	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/shared/cache"
 )
 
 // Estas pruebas son las unicas que corren con un cache que de verdad guarda. El

@@ -4,11 +4,11 @@ import (
 	"context"
 
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/auth"
-	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/cache"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/content"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/events"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/repository"
 	interactionv1 "github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/proto/interaction/v1"
+	"github.com/EstebanTech/lectonautas/backend/shared/cache"
 )
 
 // Authenticator resuelve la identidad del llamante. Es una interfaz y no el
@@ -29,7 +29,7 @@ type Books interface {
 }
 
 // Cache es lo que el servicio necesita de Valkey. El servicio no lo usa
-// directo: lo envuelve cacheAside, que le pone la politica de fallos.
+// directo: lo envuelve cache.Aside, que le pone la politica de fallos.
 type Cache interface {
 	Key(ctx context.Context, parts ...string) (string, error)
 	Get(ctx context.Context, key string, dest any) error
@@ -41,7 +41,7 @@ type Cache interface {
 var (
 	_ Authenticator = (*auth.Authenticator)(nil)
 	_ Books         = (*content.Client)(nil)
-	_ Cache         = (*cache.InteractionCache)(nil)
+	_ Cache         = (*cache.Versioned)(nil)
 )
 
 // InteractionService implementa la API del servicio. Ademas de responder, cada
@@ -50,7 +50,7 @@ var (
 //
 // Los handlers estan repartidos por entidad (like.go, comment.go, rating.go,
 // summary.go, cleanup.go); aqui queda el armado. Lo que comparten esta en sus
-// propios colaboradores: cacheAside para el cache, validation.go para los
+// propios colaboradores: cache.Aside para el cache, validation.go para los
 // campos y errors.go para la traduccion de errores.
 type InteractionService struct {
 	interactionv1.UnimplementedInteractionServiceServer
@@ -59,7 +59,7 @@ type InteractionService struct {
 	ratings  repository.RatingRepository
 	cleanup  repository.CleanupRepository
 	books    Books
-	cache    cacheAside
+	cache    cache.Aside
 	auth     Authenticator
 	bus      events.Publisher
 }
@@ -80,7 +80,7 @@ func NewInteractionService(
 		ratings:  ratings,
 		cleanup:  cleanup,
 		books:    books,
-		cache:    cacheAside{cache: interactionCache},
+		cache:    cache.NewAside(interactionCache),
 		auth:     authenticator,
 		bus:      bus,
 	}
@@ -101,7 +101,7 @@ func (s *InteractionService) writable(ctx context.Context, bookID string) (strin
 
 	book, err := s.books.PublishedBook(ctx, bookID)
 	if err != nil {
-		return "", nil, mapBookErr(err)
+		return "", nil, mapBookErr(ctx, err)
 	}
 	return userID, book, nil
 }

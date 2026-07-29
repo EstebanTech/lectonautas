@@ -58,7 +58,7 @@ func (s *LibraryService) CreateChapter(ctx context.Context, req *libraryv1.Creat
 		Status:   chapterStatus,
 	})
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to create chapter")
+		return nil, mapRepoErr(ctx, err, "failed to create chapter")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -111,7 +111,7 @@ func (s *LibraryService) GetChapter(ctx context.Context, req *libraryv1.GetChapt
 
 	chapter, err := s.chapters.GetByID(ctx, bookID, id)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load chapter")
+		return nil, mapRepoErr(ctx, err, "failed to load chapter")
 	}
 	if !isAuthor && chapter.Status != domain.ChapterStatusPublished {
 		return nil, status.Error(codes.NotFound, "chapter not found")
@@ -165,7 +165,7 @@ func (s *LibraryService) UpdateChapter(ctx context.Context, req *libraryv1.Updat
 		Status:  chapterStatus,
 	})
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to update chapter")
+		return nil, mapRepoErr(ctx, err, "failed to update chapter")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -189,7 +189,7 @@ func (s *LibraryService) DeleteChapter(ctx context.Context, req *libraryv1.Delet
 	// El capitulo tiene que existir antes de contar: si no, un id inventado
 	// sobre un libro con un solo capitulo daria "es el ultimo" en vez de 404.
 	if _, err := s.chapters.GetByID(ctx, book.ID, id); err != nil {
-		return nil, mapRepoErr(err, "failed to load chapter")
+		return nil, mapRepoErr(ctx, err, "failed to load chapter")
 	}
 
 	// Un libro que no esta publicado se puede vaciar del todo; el publicado no,
@@ -207,7 +207,7 @@ func (s *LibraryService) DeleteChapter(ctx context.Context, req *libraryv1.Delet
 	}
 
 	if err := s.chapters.Delete(ctx, book.ID, id); err != nil {
-		return nil, mapRepoErr(err, "failed to delete chapter")
+		return nil, mapRepoErr(ctx, err, "failed to delete chapter")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -230,7 +230,7 @@ func (s *LibraryService) ReorderChapters(ctx context.Context, req *libraryv1.Reo
 
 	chapters, err := s.chapters.Reorder(ctx, book.ID, ids)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to reorder chapters")
+		return nil, mapRepoErr(ctx, err, "failed to reorder chapters")
 	}
 
 	s.cache.Invalidate(ctx)

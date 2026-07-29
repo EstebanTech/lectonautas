@@ -2,6 +2,53 @@
 # Cada servicio recibe solo las que necesita, con el nombre que espera su
 # código (DATABASE_URL, GRPC_PORT, ...); la interpolación de abajo es la que
 # traduce las variables globales prefijadas a esos nombres.
+
+# Plantilla de los tres migradores. Antes eran tres bloques casi idénticos con
+# el script copiado; ahora el script vive una sola vez y lo único que cambia
+# por servicio es la base (SERVICE_DB) y qué carpeta de migraciones se monta.
+#
+# Aplica solo lo que falta: la tabla public.schema_migrations de cada base
+# registra qué versiones ya corrieron. Antes se reejecutaban TODAS en cada
+# arranque y la idempotencia se sostenía a mano (IF NOT EXISTS, ON CONFLICT,
+# WHERE ... IS NULL); eso funcionaba, pero hacía que una migración no
+# reejecutable —un DROP COLUMN, un backfill que no se puede repetir— rompiera
+# el esquema en silencio. Ahora cada archivo corre una vez.
+#
+# Cada migración va en una sola transacción junto con su registro
+# (--single-transaction con el -f y el -c en el mismo psql): si el archivo
+# falla a la mitad, no queda ni el cambio a medias ni la marca de aplicada.
+x-migrate: &migrate
+  image: postgres:16-alpine
+  entrypoint: ["sh", "-c"]
+  # $$ escapa la interpolacion de compose: el $ literal es para el shell.
+  command:
+    - |
+      set -e
+      if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$$SERVICE_DB'" | grep -q 1; then
+        echo "Creando base $$SERVICE_DB"
+        psql -d postgres -c "CREATE DATABASE \"$$SERVICE_DB\""
+      fi
+      psql -v ON_ERROR_STOP=1 -d "$$SERVICE_DB" -c \
+        'CREATE TABLE IF NOT EXISTS public.schema_migrations (
+           version    text PRIMARY KEY,
+           applied_at timestamptz NOT NULL DEFAULT now()
+         )'
+      for f in $$(ls /migrations/*.up.sql | sort); do
+        v=$$(basename "$$f" .up.sql)
+        if psql -d "$$SERVICE_DB" -tAc "SELECT 1 FROM public.schema_migrations WHERE version = '$$v'" | grep -q 1; then
+          echo "Ya aplicada: $$v"
+          continue
+        fi
+        echo "Aplicando $$v"
+        psql -v ON_ERROR_STOP=1 -d "$$SERVICE_DB" --single-transaction \
+          -f "$$f" \
+          -c "INSERT INTO public.schema_migrations (version) VALUES ('$$v')"
+      done
+  depends_on:
+    postgres:
+      condition: service_healthy
+  restart: "no"
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -19,102 +66,53 @@ services:
       timeout: 5s
       retries: 5
 
-  # Aplica las migraciones del user-service antes de que el servicio arranque.
-  # Es idempotente (CREATE ... IF NOT EXISTS), asi que correrlo en cada arranque
-  # es seguro y ademas cubre el caso de volumen recien creado (tras down -v).
-  # Corre los *.up.sql en orden y termina; user-service espera a que termine ok.
   user-migrate:
-    image: postgres:16-alpine
+    <<: *migrate
     environment:
       PGHOST: postgres
       PGUSER: ${POSTGRES_USER}
       PGPASSWORD: ${POSTGRES_PASSWORD}
-      PGDATABASE: ${USER_SERVICE_DB}
+      SERVICE_DB: ${USER_SERVICE_DB}
     volumes:
       - ./backend/microservices/user-service/migrations:/migrations:ro
-    entrypoint: ["sh", "-c"]
-    # $$ escapa la interpolacion de compose: el $ literal es para el shell.
-    command:
-      - |
-        set -e
-        for f in $$(ls /migrations/*.up.sql | sort); do
-          echo "Aplicando $$f"
-          psql -v ON_ERROR_STOP=1 -f "$$f"
-        done
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: "no"
 
-  # Igual que user-migrate, pero antes crea la base: POSTGRES_DB solo crea la
-  # primera del contenedor. Se conecta a la base 'postgres' (siempre existe) para
-  # el CREATE DATABASE, que se hace bajo un IF porque Postgres no tiene
-  # CREATE DATABASE IF NOT EXISTS.
   library-migrate:
-    image: postgres:16-alpine
+    <<: *migrate
     environment:
       PGHOST: postgres
       PGUSER: ${POSTGRES_USER}
       PGPASSWORD: ${POSTGRES_PASSWORD}
-      LIBRARY_DB: ${LIBRARY_SERVICE_DB}
+      SERVICE_DB: ${LIBRARY_SERVICE_DB}
     volumes:
       - ./backend/microservices/library-service/migrations:/migrations:ro
-    entrypoint: ["sh", "-c"]
-    # $$ escapa la interpolacion de compose: el $ literal es para el shell.
-    command:
-      - |
-        set -e
-        if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$$LIBRARY_DB'" | grep -q 1; then
-          echo "Creando base $$LIBRARY_DB"
-          psql -d postgres -c "CREATE DATABASE \"$$LIBRARY_DB\""
-        fi
-        for f in $$(ls /migrations/*.up.sql | sort); do
-          echo "Aplicando $$f"
-          psql -d "$$LIBRARY_DB" -v ON_ERROR_STOP=1 -f "$$f"
-        done
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: "no"
 
-  # Mismo patrón que library-migrate: crea su base si no existe y aplica sus
-  # *.up.sql en orden antes de que el servicio arranque.
   interaction-migrate:
-    image: postgres:16-alpine
+    <<: *migrate
     environment:
       PGHOST: postgres
       PGUSER: ${POSTGRES_USER}
       PGPASSWORD: ${POSTGRES_PASSWORD}
-      INTERACTION_DB: ${INTERACTION_SERVICE_DB}
+      SERVICE_DB: ${INTERACTION_SERVICE_DB}
     volumes:
       - ./backend/microservices/interaction-service/migrations:/migrations:ro
-    entrypoint: ["sh", "-c"]
-    # $$ escapa la interpolacion de compose: el $ literal es para el shell.
-    command:
-      - |
-        set -e
-        if ! psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = '$$INTERACTION_DB'" | grep -q 1; then
-          echo "Creando base $$INTERACTION_DB"
-          psql -d postgres -c "CREATE DATABASE \"$$INTERACTION_DB\""
-        fi
-        for f in $$(ls /migrations/*.up.sql | sort); do
-          echo "Aplicando $$f"
-          psql -d "$$INTERACTION_DB" -v ON_ERROR_STOP=1 -f "$$f"
-        done
-    depends_on:
-      postgres:
-        condition: service_healthy
-    restart: "no"
 
   user-service:
     build:
-      context: ./backend/microservices/user-service
+      # El contexto es backend/ y no la carpeta del servicio: los tres módulos
+      # dependen de backend/shared con un replace relativo, y sin él dentro del
+      # contexto la imagen no compila.
+      context: ./backend
+      dockerfile: microservices/user-service/Dockerfile
     environment:
       GRPC_PORT: ${USER_SERVICE_GRPC_PORT}
       # Dentro de la red del compose Postgres siempre escucha en 5432
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${USER_SERVICE_DB}?sslmode=disable
       # Valkey, compartido con el ratelimit-service, para el cache de sesiones
       REDIS_ADDR: valkey:6379
+      # Secreto compartido de las llamadas entre servicios. Lo exige
+      # ValidateSession, que es como los vecinos resuelven cada token.
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+      LOG_LEVEL: ${LOG_LEVEL}
       # Al dar de baja una cuenta hay que borrar su obra, que vive en la
       # base de library-service. No va en depends_on a propósito: la conexión
       # gRPC es perezosa y library-service ya depende de éste, así que ponerlo
@@ -124,42 +122,61 @@ services:
       # calificaciones), que vive en la base de interaction-service. Tampoco va
       # en depends_on: la conexión es perezosa y meterlo aquí cerraría el ciclo.
       INTERACTION_SERVICE_ADDR: interaction-service:${INTERACTION_SERVICE_GRPC_PORT}
+    # Habla el protocolo de health de gRPC, así que dice que el servicio
+    # RESPONDE, no solo que el contenedor arrancó. Es lo que permite que los de
+    # abajo esperen con service_healthy en vez de service_started.
+    healthcheck:
+      test: ["CMD", "/healthprobe", "-addr=:${USER_SERVICE_GRPC_PORT}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
       valkey:
-        condition: service_started
+        condition: service_healthy
       user-migrate:
         condition: service_completed_successfully
 
   library-service:
     build:
-      context: ./backend/microservices/library-service
+      context: ./backend
+      dockerfile: microservices/library-service/Dockerfile
     environment:
       GRPC_PORT: ${LIBRARY_SERVICE_GRPC_PORT}
       # Dentro de la red del compose Postgres siempre escucha en 5432
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${LIBRARY_SERVICE_DB}?sslmode=disable
       # Valkey, para cachear las lecturas (books, sagas, catálogo de géneros)
       REDIS_ADDR: valkey:6379
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+      LOG_LEVEL: ${LOG_LEVEL}
       # No tiene la tabla de sesiones: le pregunta a user-service por cada token
       USER_SERVICE_ADDR: user-service:${USER_SERVICE_GRPC_PORT}
       # Al borrar un libro hay que llevarse sus me gusta, comentarios y
       # calificaciones, que viven en la base de interaction-service. Fuera de
       # depends_on por lo mismo de siempre: la conexión gRPC es perezosa.
       INTERACTION_SERVICE_ADDR: interaction-service:${INTERACTION_SERVICE_GRPC_PORT}
+    healthcheck:
+      test: ["CMD", "/healthprobe", "-addr=:${LIBRARY_SERVICE_GRPC_PORT}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
       valkey:
-        condition: service_started
+        condition: service_healthy
       library-migrate:
         condition: service_completed_successfully
       user-service:
-        condition: service_started
+        condition: service_healthy
 
   interaction-service:
     build:
-      context: ./backend/microservices/interaction-service
+      context: ./backend
+      dockerfile: microservices/interaction-service/Dockerfile
     environment:
       GRPC_PORT: ${INTERACTION_SERVICE_GRPC_PORT}
       # Puerto HTTP del WebSocket. El gateway lo enruta aparte, sin transcoder.
@@ -170,25 +187,38 @@ services:
       # reparte los eventos entre réplicas para que el WebSocket funcione con
       # más de una instancia.
       REDIS_ADDR: valkey:6379
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN}
+      LOG_LEVEL: ${LOG_LEVEL}
       # No tiene la tabla de sesiones: le pregunta a user-service por cada token
       USER_SERVICE_ADDR: user-service:${USER_SERVICE_GRPC_PORT}
       # Ni la de libros: le pregunta a library-service si el libro existe y está
       # publicado antes de aceptar una interacción sobre él.
       LIBRARY_SERVICE_ADDR: library-service:${LIBRARY_SERVICE_GRPC_PORT}
+    healthcheck:
+      test: ["CMD", "/healthprobe", "-addr=:${INTERACTION_SERVICE_GRPC_PORT}"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
     depends_on:
       postgres:
         condition: service_healthy
       valkey:
-        condition: service_started
+        condition: service_healthy
       interaction-migrate:
         condition: service_completed_successfully
       library-service:
-        condition: service_started
+        condition: service_healthy
 
   valkey:
     image: valkey/valkey:8-alpine
     ports:
       - "${VALKEY_PORT}:6379"
+    healthcheck:
+      test: ["CMD", "valkey-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
 
   ratelimit:
     image: envoyproxy/ratelimit:master
@@ -205,7 +235,8 @@ services:
     volumes:
       - ./gateway/ratelimit/config:/data/ratelimit/config:ro
     depends_on:
-      - valkey
+      valkey:
+        condition: service_healthy
     ports:
       - "${RATELIMIT_PORT}:8081"
 
@@ -216,11 +247,18 @@ services:
       # Un solo descriptor con todos los servicios: lo genera `make proto-descriptor`
       # en la raíz. Al regenerarlo hay que reiniciar el gateway para que lo recargue.
       - ./gateway/proto/services.pb:/etc/envoy/proto/services.pb:ro
+    # Ahora espera a que los tres respondan de verdad, no solo a que sus
+    # contenedores existan: así el primer request tras `docker compose up` no se
+    # encuentra un upstream que todavía está abriendo su pool de Postgres.
     depends_on:
-      - user-service
-      - library-service
-      - interaction-service
-      - ratelimit
+      user-service:
+        condition: service_healthy
+      library-service:
+        condition: service_healthy
+      interaction-service:
+        condition: service_healthy
+      ratelimit:
+        condition: service_started
     ports:
       - "${GATEWAY_HTTP_PORT}:8080"
       - "${GATEWAY_ADMIN_PORT}:9901"

@@ -3,9 +3,9 @@ package service
 import (
 	"context"
 
-	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/cache"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
 	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/shared/cache"
 )
 
 // cachedSagaDetail es lo que se guarda en Valkey para GetSaga.
@@ -41,7 +41,7 @@ func (s *LibraryService) CreateSaga(ctx context.Context, req *libraryv1.CreateSa
 		Description: description,
 	})
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to create saga")
+		return nil, mapRepoErr(ctx, err, "failed to create saga")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -94,7 +94,7 @@ func (s *LibraryService) listSagas(ctx context.Context, filter domain.SagaFilter
 
 	sagas, total, err := s.sagas.List(ctx, filter)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to list sagas")
+		return nil, mapRepoErr(ctx, err, "failed to list sagas")
 	}
 
 	s.cache.Set(ctx, key, cachedSagaList{Sagas: sagas, Total: total})
@@ -135,7 +135,7 @@ func (s *LibraryService) GetSaga(ctx context.Context, req *libraryv1.GetSagaRequ
 
 	saga, err := s.sagas.GetByID(ctx, id)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load saga")
+		return nil, mapRepoErr(ctx, err, "failed to load saga")
 	}
 	isAuthor := callerID != "" && saga.AuthorID == callerID
 
@@ -151,7 +151,7 @@ func (s *LibraryService) GetSaga(ctx context.Context, req *libraryv1.GetSagaRequ
 
 	books, err := s.sagas.ListBooks(ctx, id)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load saga books")
+		return nil, mapRepoErr(ctx, err, "failed to load saga books")
 	}
 	if !isAuthor {
 		books = publishedOnly(books)
@@ -203,7 +203,7 @@ func (s *LibraryService) UpdateSaga(ctx context.Context, req *libraryv1.UpdateSa
 		Description: description,
 	})
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to update saga")
+		return nil, mapRepoErr(ctx, err, "failed to update saga")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -220,7 +220,7 @@ func (s *LibraryService) DeleteSaga(ctx context.Context, req *libraryv1.DeleteSa
 	}
 
 	if err := s.sagas.Delete(ctx, saga.ID); err != nil {
-		return nil, mapRepoErr(err, "failed to delete saga")
+		return nil, mapRepoErr(ctx, err, "failed to delete saga")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -249,14 +249,14 @@ func (s *LibraryService) AddBookToSaga(ctx context.Context, req *libraryv1.AddBo
 	}
 
 	if err := s.sagas.AddBook(ctx, saga.ID, bookID, req.GetPosition()); err != nil {
-		return nil, mapRepoErr(err, "failed to add book to saga")
+		return nil, mapRepoErr(ctx, err, "failed to add book to saga")
 	}
 
 	s.cache.Invalidate(ctx)
 
 	books, err := s.sagas.ListBooks(ctx, saga.ID)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load saga books")
+		return nil, mapRepoErr(ctx, err, "failed to load saga books")
 	}
 
 	return sagaDetail(saga, books), nil
@@ -273,7 +273,7 @@ func (s *LibraryService) RemoveBookFromSaga(ctx context.Context, req *libraryv1.
 	}
 
 	if err := s.sagas.RemoveBook(ctx, saga.ID, bookID); err != nil {
-		return nil, mapRepoErr(err, "failed to remove book from saga")
+		return nil, mapRepoErr(ctx, err, "failed to remove book from saga")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -294,14 +294,14 @@ func (s *LibraryService) ReorderSagaBooks(ctx context.Context, req *libraryv1.Re
 	}
 
 	if err := s.sagas.ReorderBooks(ctx, saga.ID, ids); err != nil {
-		return nil, mapRepoErr(err, "failed to reorder saga books")
+		return nil, mapRepoErr(ctx, err, "failed to reorder saga books")
 	}
 
 	s.cache.Invalidate(ctx)
 
 	books, err := s.sagas.ListBooks(ctx, saga.ID)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load saga books")
+		return nil, mapRepoErr(ctx, err, "failed to load saga books")
 	}
 
 	return sagaDetail(saga, books), nil

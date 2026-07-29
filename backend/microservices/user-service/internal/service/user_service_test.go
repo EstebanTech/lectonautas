@@ -141,8 +141,8 @@ func TestCreateUser_InvalidaElListadoCompleto(t *testing.T) {
 
 	// Sin esto, GetAllUsers seguiria sirviendo una lista sin el usuario nuevo
 	// hasta que venciera el TTL.
-	if h.userCache.invalidatedAll != 1 {
-		t.Fatalf("invalidaciones del listado = %d, se esperaba 1", h.userCache.invalidatedAll)
+	if h.userCache.bumps != 1 {
+		t.Fatalf("invalidaciones = %d, se esperaba 1", h.userCache.bumps)
 	}
 }
 
@@ -320,8 +320,8 @@ func TestUpdateUser_InvalidaElCacheDelUsuario(t *testing.T) {
 		t.Fatalf("error inesperado: %v", err)
 	}
 
-	if len(h.userCache.invalidatedUsers) != 1 || h.userCache.invalidatedUsers[0] != testUserID {
-		t.Fatalf("invalidaciones = %v, se esperaba [%s]", h.userCache.invalidatedUsers, testUserID)
+	if h.userCache.bumps != 1 {
+		t.Fatalf("invalidaciones = %d, se esperaba 1", h.userCache.bumps)
 	}
 
 	// Y la siguiente lectura tiene que volver a la BD, no servir lo viejo.
@@ -370,8 +370,8 @@ func TestDeleteUser_InvalidaElCache(t *testing.T) {
 		t.Fatalf("error inesperado: %v", err)
 	}
 
-	if len(h.userCache.invalidatedUsers) != 1 {
-		t.Fatalf("invalidaciones = %d, se esperaba 1", len(h.userCache.invalidatedUsers))
+	if h.userCache.bumps != 1 {
+		t.Fatalf("invalidaciones = %d, se esperaba 1", h.userCache.bumps)
 	}
 }
 

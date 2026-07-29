@@ -56,7 +56,7 @@ func (s *InteractionService) commentCount(ctx context.Context, bookID string) (i
 
 	n, err := s.comments.CountByBook(ctx, bookID)
 	if err != nil {
-		return 0, mapRepoErr(err, "failed to count comments")
+		return 0, mapRepoErr(ctx, err, "failed to count comments")
 	}
 
 	s.cache.Set(ctx, key, n)

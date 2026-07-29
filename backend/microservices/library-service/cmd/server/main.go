@@ -2,7 +2,7 @@ package main
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/signal"
@@ -10,30 +10,38 @@ import (
 	"time"
 
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/auth"
-	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/cache"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/config"
-	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/database"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/interaction"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/repository"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/server"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/service"
+	"github.com/EstebanTech/lectonautas/backend/shared/cache"
+	sharedconfig "github.com/EstebanTech/lectonautas/backend/shared/config"
+	"github.com/EstebanTech/lectonautas/backend/shared/database"
+	"github.com/EstebanTech/lectonautas/backend/shared/logx"
 )
 
+// cachePrefix es el espacio de nombres de este servicio en Valkey, que esta
+// compartido con los demas y con el rate limiting.
+const cachePrefix = "lib:"
+
 func main() {
-	if path, err := config.LoadRootDotEnv(); err != nil {
-		log.Printf("no global .env loaded (%v), using environment variables", err)
+	logx.Setup("library-service")
+
+	if path, err := sharedconfig.LoadRootDotEnv(); err != nil {
+		slog.Info("no global .env loaded, using environment variables", slog.String("error", err.Error()))
 	} else {
-		log.Printf("loaded environment from %s", path)
+		slog.Info("loaded environment", slog.String("path", path))
 	}
 
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		fatal("failed to load config", err)
 	}
 
 	pool, err := database.NewPostgresPool(cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("failed to connect to database: %v", err)
+		fatal("failed to connect to database", err)
 	}
 	defer pool.Close()
 
@@ -43,18 +51,18 @@ func main() {
 	pingCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := valkey.Ping(pingCtx); err != nil {
-		log.Fatalf("failed to connect to valkey (%s): %v", cfg.RedisAddr, err)
+		fatal("failed to connect to valkey", err, slog.String("addr", cfg.RedisAddr))
 	}
 
 	// La conexion a user-service es perezosa: no conecta hasta la primera
 	// validacion de token, asi que arrancar antes que el no rompe nada.
-	authenticator, err := auth.New(cfg.UserServiceAddr)
+	authenticator, err := auth.New(cfg.UserServiceAddr, cfg.InternalSecret)
 	if err != nil {
-		log.Fatalf("failed to create user-service client (%s): %v", cfg.UserServiceAddr, err)
+		fatal("failed to create user-service client", err, slog.String("addr", cfg.UserServiceAddr))
 	}
 	defer authenticator.Close()
 
-	libraryCache := cache.NewLibraryCache(valkey)
+	libraryCache := cache.NewVersioned(valkey, cachePrefix)
 
 	bookRepo := repository.NewPostgresBookRepository(pool)
 	chapterRepo := repository.NewPostgresChapterRepository(pool)
@@ -64,24 +72,24 @@ func main() {
 	// Al borrar un libro hay que llevarse sus me gusta, comentarios y
 	// calificaciones, que viven en la base de interaction-service. Conexion
 	// perezosa, como las demas.
-	interactionClient, err := interaction.New(cfg.InteractionServiceAddr)
+	interactionClient, err := interaction.New(cfg.InteractionServiceAddr, cfg.InternalSecret)
 	if err != nil {
-		log.Fatalf("failed to create interaction-service client (%s): %v", cfg.InteractionServiceAddr, err)
+		fatal("failed to create interaction-service client", err, slog.String("addr", cfg.InteractionServiceAddr))
 	}
 	defer interactionClient.Close()
 
 	libraryService := service.NewLibraryService(bookRepo, chapterRepo, sagaRepo, genreRepo, libraryCache, authenticator, interactionClient)
-	grpcServer := server.NewGRPCServer(libraryService)
+	grpcServer := server.NewGRPCServer(libraryService, cfg.InternalSecret)
 
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {
-		log.Fatalf("failed to listen on port %s: %v", cfg.GRPCPort, err)
+		fatal("failed to listen", err, slog.String("port", cfg.GRPCPort))
 	}
 
 	go func() {
-		log.Printf("library-service gRPC server listening on :%s", cfg.GRPCPort)
+		slog.Info("gRPC server listening", slog.String("port", cfg.GRPCPort))
 		if err := grpcServer.Serve(lis); err != nil {
-			log.Fatalf("failed to serve: %v", err)
+			fatal("failed to serve", err)
 		}
 	}()
 
@@ -89,6 +97,19 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 
-	log.Println("shutting down gracefully...")
+	slog.Info("shutting down gracefully")
 	grpcServer.GracefulStop()
+}
+
+// fatal deja el error en el log estructurado y termina. Sustituye a
+// log.Fatalf, que escribia en un formato distinto al del resto y se saltaba el
+// handler de slog.
+func fatal(msg string, err error, attrs ...slog.Attr) {
+	args := make([]any, 0, len(attrs)+1)
+	args = append(args, slog.String("error", err.Error()))
+	for _, a := range attrs {
+		args = append(args, a)
+	}
+	slog.Error(msg, args...)
+	os.Exit(1)
 }

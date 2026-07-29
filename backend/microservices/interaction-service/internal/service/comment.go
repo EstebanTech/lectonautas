@@ -6,10 +6,10 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/cache"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/domain"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/events"
 	interactionv1 "github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/proto/interaction/v1"
+	"github.com/EstebanTech/lectonautas/backend/shared/cache"
 )
 
 // cachedCommentList es lo que se guarda en Valkey para ListComments: la pagina
@@ -41,7 +41,7 @@ func (s *InteractionService) CreateComment(ctx context.Context, req *interaction
 		Body:   body,
 	})
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to create comment")
+		return nil, mapRepoErr(ctx, err, "failed to create comment")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -77,7 +77,7 @@ func (s *InteractionService) ListComments(ctx context.Context, req *interactionv
 
 	comments, total, err := s.comments.ListByBook(ctx, filter)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to list comments")
+		return nil, mapRepoErr(ctx, err, "failed to list comments")
 	}
 
 	s.cache.Set(ctx, key, cachedCommentList{Comments: comments, Total: total})
@@ -110,7 +110,7 @@ func (s *InteractionService) UpdateComment(ctx context.Context, req *interaction
 
 	existing, err := s.comments.GetByID(ctx, bookID, id)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load comment")
+		return nil, mapRepoErr(ctx, err, "failed to load comment")
 	}
 	if existing.UserID != callerID {
 		return nil, status.Error(codes.PermissionDenied, "only the author can edit this comment")
@@ -118,7 +118,7 @@ func (s *InteractionService) UpdateComment(ctx context.Context, req *interaction
 
 	updated, err := s.comments.Update(ctx, bookID, id, body)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to update comment")
+		return nil, mapRepoErr(ctx, err, "failed to update comment")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -151,7 +151,7 @@ func (s *InteractionService) DeleteComment(ctx context.Context, req *interaction
 
 	existing, err := s.comments.GetByID(ctx, bookID, id)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load comment")
+		return nil, mapRepoErr(ctx, err, "failed to load comment")
 	}
 
 	if existing.UserID != callerID && !s.ownsBook(ctx, bookID, callerID) {
@@ -160,7 +160,7 @@ func (s *InteractionService) DeleteComment(ctx context.Context, req *interaction
 	}
 
 	if err := s.comments.Delete(ctx, bookID, id); err != nil {
-		return nil, mapRepoErr(err, "failed to delete comment")
+		return nil, mapRepoErr(ctx, err, "failed to delete comment")
 	}
 
 	s.cache.Invalidate(ctx)

@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -12,31 +12,39 @@ import (
 	"time"
 
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/auth"
-	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/cache"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/config"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/content"
-	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/database"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/events"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/repository"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/server"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/service"
+	"github.com/EstebanTech/lectonautas/backend/shared/cache"
+	sharedconfig "github.com/EstebanTech/lectonautas/backend/shared/config"
+	"github.com/EstebanTech/lectonautas/backend/shared/database"
+	"github.com/EstebanTech/lectonautas/backend/shared/logx"
 )
 
+// cachePrefix es el espacio de nombres de este servicio en Valkey, que esta
+// compartido con los demas y con el rate limiting.
+const cachePrefix = "inter:"
+
 func main() {
-	if path, err := config.LoadRootDotEnv(); err != nil {
-		log.Printf("no global .env loaded (%v), using environment variables", err)
+	logx.Setup("interaction-service")
+
+	if path, err := sharedconfig.LoadRootDotEnv(); err != nil {
+		slog.Info("no global .env loaded, using environment variables", slog.String("error", err.Error()))
 	} else {
-		log.Printf("loaded environment from %s", path)
+		slog.Info("loaded environment", slog.String("path", path))
 	}
 
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		fatal("failed to load config", err)
 	}
 
 	pool, err := database.NewPostgresPool(cfg.DatabaseURL)
 	if err != nil {
-		log.Fatalf("failed to connect to database: %v", err)
+		fatal("failed to connect to database", err)
 	}
 	defer pool.Close()
 
@@ -46,24 +54,24 @@ func main() {
 	pingCtx, cancelPing := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelPing()
 	if err := valkey.Ping(pingCtx); err != nil {
-		log.Fatalf("failed to connect to valkey (%s): %v", cfg.RedisAddr, err)
+		fatal("failed to connect to valkey", err, slog.String("addr", cfg.RedisAddr))
 	}
 
 	// Las conexiones a los vecinos son perezosas: no conectan hasta la primera
 	// llamada, asi que arrancar antes que ellos no rompe nada.
-	authenticator, err := auth.New(cfg.UserServiceAddr)
+	authenticator, err := auth.New(cfg.UserServiceAddr, cfg.InternalSecret)
 	if err != nil {
-		log.Fatalf("failed to create user-service client (%s): %v", cfg.UserServiceAddr, err)
+		fatal("failed to create user-service client", err, slog.String("addr", cfg.UserServiceAddr))
 	}
 	defer authenticator.Close()
 
-	books, err := content.New(cfg.LibraryServiceAddr)
+	books, err := content.New(cfg.LibraryServiceAddr, cfg.InternalSecret)
 	if err != nil {
-		log.Fatalf("failed to create library-service client (%s): %v", cfg.LibraryServiceAddr, err)
+		fatal("failed to create library-service client", err, slog.String("addr", cfg.LibraryServiceAddr))
 	}
 	defer books.Close()
 
-	interactionCache := cache.NewInteractionCache(valkey)
+	interactionCache := cache.NewVersioned(valkey, cachePrefix)
 	bus := events.NewBus(valkey.Redis())
 
 	interactionService := service.NewInteractionService(
@@ -89,10 +97,10 @@ func main() {
 	// pueden multiplexar en un listener: gRPC (que el gateway transcodifica a
 	// REST) y HTTP/1.1 para el WebSocket, que el transcoder no sabe manejar y
 	// llega crudo.
-	grpcServer := server.NewGRPCServer(interactionService)
+	grpcServer := server.NewGRPCServer(interactionService, cfg.InternalSecret)
 	lis, err := net.Listen("tcp", ":"+cfg.GRPCPort)
 	if err != nil {
-		log.Fatalf("failed to listen on port %s: %v", cfg.GRPCPort, err)
+		fatal("failed to listen", err, slog.String("port", cfg.GRPCPort))
 	}
 
 	wsHandler := server.NewWSHandler(hub, interactionService, books, authenticator)
@@ -107,16 +115,16 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("interaction-service gRPC server listening on :%s", cfg.GRPCPort)
+		slog.Info("gRPC server listening", slog.String("port", cfg.GRPCPort))
 		if err := grpcServer.Serve(lis); err != nil {
-			log.Fatalf("failed to serve gRPC: %v", err)
+			fatal("failed to serve gRPC", err)
 		}
 	}()
 
 	go func() {
-		log.Printf("interaction-service WebSocket server listening on :%s", cfg.WSPort)
+		slog.Info("WebSocket server listening", slog.String("port", cfg.WSPort))
 		if err := httpServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("failed to serve HTTP: %v", err)
+			fatal("failed to serve HTTP", err)
 		}
 	}()
 
@@ -124,7 +132,7 @@ func main() {
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
 
-	log.Println("shutting down gracefully...")
+	slog.Info("shutting down gracefully")
 
 	// El HTTP se cierra con plazo: los WebSocket abiertos no terminan solos, y
 	// sin el limite el apagado se quedaria esperando a que el ultimo lector
@@ -132,8 +140,21 @@ func main() {
 	shutdownCtx, cancelShutdown := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancelShutdown()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
-		log.Printf("http shutdown: %v", err)
+		slog.Error("http shutdown", slog.String("error", err.Error()))
 	}
 
 	grpcServer.GracefulStop()
+}
+
+// fatal deja el error en el log estructurado y termina. Sustituye a
+// log.Fatalf, que escribia en un formato distinto al del resto y se saltaba el
+// handler de slog.
+func fatal(msg string, err error, attrs ...slog.Attr) {
+	args := make([]any, 0, len(attrs)+1)
+	args = append(args, slog.String("error", err.Error()))
+	for _, a := range attrs {
+		args = append(args, a)
+	}
+	slog.Error(msg, args...)
+	os.Exit(1)
 }

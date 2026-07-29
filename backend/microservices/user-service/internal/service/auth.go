@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -12,11 +12,12 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
-	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/cache"
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/domain"
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/repository"
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/token"
 	userv1 "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/user/v1"
+	sharedcache "github.com/EstebanTech/lectonautas/backend/shared/cache"
+	"github.com/EstebanTech/lectonautas/backend/shared/logx"
 )
 
 const (
@@ -87,7 +88,7 @@ func (s *UserService) Login(ctx context.Context, req *userv1.LoginRequest) (*use
 	}
 	if err := s.cache.Set(ctx, hash, user.ID, sessionCacheTTLFor(sess.ExpiresAt)); err != nil {
 		// No es fatal: la sesion ya vive en la BD y se repuebla en el proximo acceso.
-		log.Printf("session cache set failed: %v", err)
+		logx.From(ctx).Warn("session cache set failed", slog.String("error", err.Error()))
 	}
 
 	user.Password = ""
@@ -118,7 +119,7 @@ func (s *UserService) Logout(ctx context.Context, _ *userv1.LogoutRequest) (*use
 	hash := token.Hash(raw)
 
 	if err := s.cache.Delete(ctx, hash); err != nil {
-		log.Printf("session cache delete failed: %v", err)
+		logx.From(ctx).Warn("session cache delete failed", slog.String("error", err.Error()))
 	}
 	if err := s.sessions.Revoke(ctx, hash); err != nil {
 		if errors.Is(err, repository.ErrSessionNotFound) {
@@ -129,7 +130,7 @@ func (s *UserService) Logout(ctx context.Context, _ *userv1.LogoutRequest) (*use
 		}
 		// Error real de la BD: lo dejamos en el log (el cliente solo ve un
 		// mensaje generico) para poder diagnosticar la causa.
-		log.Printf("logout revoke failed: %v", err)
+		logx.From(ctx).Error("logout revoke failed", slog.String("error", err.Error()))
 		return nil, status.Error(codes.Internal, "failed to logout")
 	}
 	return &userv1.LogoutResponse{Success: true}, nil
@@ -176,9 +177,9 @@ func (s *UserService) resolveSession(ctx context.Context, raw string) (string, e
 	if err == nil {
 		return userID, nil
 	}
-	if !errors.Is(err, cache.ErrMiss) {
+	if !errors.Is(err, sharedcache.ErrMiss) {
 		// Error real de Valkey (no un simple miss): seguimos con la BD igual.
-		log.Printf("session cache get failed: %v", err)
+		logx.From(ctx).Warn("session cache get failed", slog.String("error", err.Error()))
 	}
 
 	// 2) Miss: la fuente de verdad es la BD.
@@ -194,7 +195,7 @@ func (s *UserService) resolveSession(ctx context.Context, raw string) (string, e
 	// queda menos que eso).
 	if ttl := sessionCacheTTLFor(sess.ExpiresAt); ttl > 0 {
 		if err := s.cache.Set(ctx, hash, sess.UserID, ttl); err != nil {
-			log.Printf("session cache set failed: %v", err)
+			logx.From(ctx).Warn("session cache set failed", slog.String("error", err.Error()))
 		}
 	}
 	return sess.UserID, nil

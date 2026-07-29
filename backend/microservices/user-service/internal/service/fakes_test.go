@@ -6,10 +6,14 @@ import (
 
 	"google.golang.org/grpc/metadata"
 
-	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/cache"
+	"encoding/json"
+	"strconv"
+	"strings"
+
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/domain"
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/repository"
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/token"
+	sharedcache "github.com/EstebanTech/lectonautas/backend/shared/cache"
 )
 
 // Dobles en memoria de las dependencias del servicio. Ademas de responder,
@@ -189,7 +193,7 @@ func (c *fakeSessionCache) Set(_ context.Context, hash, userID string, _ time.Du
 func (c *fakeSessionCache) Get(_ context.Context, hash string) (string, error) {
 	userID, ok := c.entries[hash]
 	if !ok {
-		return "", cache.ErrMiss
+		return "", sharedcache.ErrMiss
 	}
 	return userID, nil
 }
@@ -200,53 +204,48 @@ func (c *fakeSessionCache) Delete(_ context.Context, hash string) error {
 	return nil
 }
 
+// fakeUserCache imita al cache versionado compartido: claves que llevan dentro
+// un contador y valores serializados como JSON. Sin la version no se podria
+// probar la invalidacion, que es justo lo que hay que afirmar — que despues de
+// una escritura la siguiente lectura vuelve a la BD.
 type fakeUserCache struct {
-	users map[string]*domain.User
-	all   []*domain.User
+	version int
+	entries map[string][]byte
 
-	invalidatedUsers []string
-	invalidatedAll   int
+	// bumps cuenta las invalidaciones. Es el equivalente al viejo par
+	// invalidatedUsers/invalidatedAll: con el contador de version ya no hay dos
+	// invalidaciones distintas que contar, porque una sola se lleva todo.
+	bumps int
 }
 
 func newFakeUserCache() *fakeUserCache {
-	return &fakeUserCache{users: map[string]*domain.User{}}
+	return &fakeUserCache{entries: map[string][]byte{}}
 }
 
-func (c *fakeUserCache) SetUser(_ context.Context, u *domain.User, _ time.Duration) error {
-	c.users[u.ID] = u
-	return nil
+func (c *fakeUserCache) Key(_ context.Context, parts ...string) (string, error) {
+	return "v" + strconv.Itoa(c.version) + ":" + strings.Join(parts, ":"), nil
 }
 
-func (c *fakeUserCache) GetUser(_ context.Context, id string) (*domain.User, error) {
-	u, ok := c.users[id]
+func (c *fakeUserCache) Get(_ context.Context, key string, dest any) error {
+	payload, ok := c.entries[key]
 	if !ok {
-		return nil, cache.ErrMiss
+		return sharedcache.ErrMiss
 	}
-	return u, nil
+	return json.Unmarshal(payload, dest)
 }
 
-func (c *fakeUserCache) SetAllUsers(_ context.Context, users []*domain.User, _ time.Duration) error {
-	c.all = users
+func (c *fakeUserCache) Set(_ context.Context, key string, value any) error {
+	payload, err := json.Marshal(value)
+	if err != nil {
+		return err
+	}
+	c.entries[key] = payload
 	return nil
 }
 
-func (c *fakeUserCache) GetAllUsers(context.Context) ([]*domain.User, error) {
-	if c.all == nil {
-		return nil, cache.ErrMiss
-	}
-	return c.all, nil
-}
-
-func (c *fakeUserCache) InvalidateUser(_ context.Context, id string) error {
-	c.invalidatedUsers = append(c.invalidatedUsers, id)
-	delete(c.users, id)
-	c.all = nil
-	return nil
-}
-
-func (c *fakeUserCache) InvalidateAllUsers(context.Context) error {
-	c.invalidatedAll++
-	c.all = nil
+func (c *fakeUserCache) Bump(context.Context) error {
+	c.version++
+	c.bumps++
 	return nil
 }
 

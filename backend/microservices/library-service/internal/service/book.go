@@ -6,9 +6,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/cache"
 	"github.com/EstebanTech/lectonautas/backend/microservices/library-service/internal/domain"
 	libraryv1 "github.com/EstebanTech/lectonautas/backend/microservices/library-service/proto/library/v1"
+	"github.com/EstebanTech/lectonautas/backend/shared/cache"
 )
 
 // cachedBookDetail es lo que se guarda en Valkey para GetBook: el libro con la
@@ -75,7 +75,7 @@ func (s *LibraryService) CreateBook(ctx context.Context, req *libraryv1.CreateBo
 		Status:      bookStatus,
 	}, genres)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to create book")
+		return nil, mapRepoErr(ctx, err, "failed to create book")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -189,7 +189,7 @@ func (s *LibraryService) queryBooks(ctx context.Context, filter domain.BookFilte
 
 	books, total, err := s.books.List(ctx, filter)
 	if err != nil {
-		return nil, 0, mapRepoErr(err, "failed to list books")
+		return nil, 0, mapRepoErr(ctx, err, "failed to list books")
 	}
 
 	s.cache.Set(ctx, key, cachedBookList{Books: books, Total: total})
@@ -248,7 +248,7 @@ func (s *LibraryService) GetBook(ctx context.Context, req *libraryv1.GetBookRequ
 
 	chapters, err := s.chapters.ListByBook(ctx, id, !isAuthor)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load chapters")
+		return nil, mapRepoErr(ctx, err, "failed to load chapters")
 	}
 
 	s.cache.Set(ctx, key, cachedBookDetail{Book: book, Chapters: chapters})
@@ -312,7 +312,7 @@ func (s *LibraryService) UpdateBook(ctx context.Context, req *libraryv1.UpdateBo
 		Status:      bookStatus,
 	})
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to update book")
+		return nil, mapRepoErr(ctx, err, "failed to update book")
 	}
 
 	s.cache.Invalidate(ctx)
@@ -329,7 +329,7 @@ func (s *LibraryService) DeleteBook(ctx context.Context, req *libraryv1.DeleteBo
 	}
 
 	if err := s.books.Delete(ctx, book.ID); err != nil {
-		return nil, mapRepoErr(err, "failed to delete book")
+		return nil, mapRepoErr(ctx, err, "failed to delete book")
 	}
 
 	s.cache.Invalidate(ctx)

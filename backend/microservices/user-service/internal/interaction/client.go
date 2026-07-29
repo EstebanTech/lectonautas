@@ -12,9 +12,9 @@ import (
 	"context"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 
 	interactionv1 "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/interaction/v1"
+	"github.com/EstebanTech/lectonautas/backend/shared/grpcx"
 )
 
 type Client struct {
@@ -22,8 +22,8 @@ type Client struct {
 	client interactionv1.InteractionServiceClient
 }
 
-func New(addr string) (*Client, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+func New(addr, internalSecret string) (*Client, error) {
+	conn, err := grpcx.Dial(addr, internalSecret)
 	if err != nil {
 		return nil, err
 	}

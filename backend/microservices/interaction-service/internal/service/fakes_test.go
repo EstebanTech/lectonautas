@@ -9,11 +9,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/cache"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/content"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/domain"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/events"
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/repository"
+	"github.com/EstebanTech/lectonautas/backend/shared/cache"
 )
 
 // Dobles en memoria de las dependencias del servicio. Solo implementan lo que

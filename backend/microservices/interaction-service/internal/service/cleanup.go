@@ -2,10 +2,11 @@ package service
 
 import (
 	"context"
-	"log"
+	"log/slog"
 
 	"github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/internal/repository"
 	interactionv1 "github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/proto/interaction/v1"
+	"github.com/EstebanTech/lectonautas/backend/shared/logx"
 )
 
 // Los dos borrados de abajo no piden token ni comprueban propiedad, a
@@ -27,7 +28,7 @@ func (s *InteractionService) DeleteUserInteractions(ctx context.Context, req *in
 
 	counts, err := s.cleanup.DeleteByUser(ctx, userID)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to delete user interactions")
+		return nil, mapRepoErr(ctx, err, "failed to delete user interactions")
 	}
 
 	return s.finishCleanup(ctx, counts), nil
@@ -44,7 +45,7 @@ func (s *InteractionService) DeleteBookInteractions(ctx context.Context, req *in
 
 	counts, err := s.cleanup.DeleteByBook(ctx, bookID)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to delete book interactions")
+		return nil, mapRepoErr(ctx, err, "failed to delete book interactions")
 	}
 
 	return s.finishCleanup(ctx, counts), nil
@@ -56,7 +57,10 @@ func (s *InteractionService) DeleteBookInteractions(ctx context.Context, req *in
 // una tormenta de eventos por una operacion que pasa una vez.
 func (s *InteractionService) finishCleanup(ctx context.Context, counts repository.Counts) *interactionv1.DeleteInteractionsResponse {
 	s.cache.Invalidate(ctx)
-	log.Printf("cleanup: %d likes, %d comments, %d ratings", counts.Likes, counts.Comments, counts.Ratings)
+	logx.From(ctx).Info("cleanup done",
+		slog.Int("likes", int(counts.Likes)),
+		slog.Int("comments", int(counts.Comments)),
+		slog.Int("ratings", int(counts.Ratings)))
 
 	return &interactionv1.DeleteInteractionsResponse{
 		LikesDeleted:    counts.Likes,

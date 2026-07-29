@@ -25,12 +25,12 @@ func (s *LibraryService) DeleteAuthorContent(ctx context.Context, req *libraryv1
 	// dos consultas es una carrera que no preocupa: es su propia baja de cuenta.
 	bookIDs, err := s.books.IDsByAuthor(ctx, userID)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to list author books")
+		return nil, mapRepoErr(ctx, err, "failed to list author books")
 	}
 
 	books, sagas, err := s.books.DeleteByAuthor(ctx, userID)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to delete author content")
+		return nil, mapRepoErr(ctx, err, "failed to delete author content")
 	}
 
 	s.cache.Invalidate(ctx)

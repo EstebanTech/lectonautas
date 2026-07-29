@@ -3,12 +3,16 @@
 # cruza servicios.
 
 SERVICES := user-service library-service interaction-service
+# Los módulos Go del repo: los tres servicios más la infraestructura común.
+# Son módulos distintos, así que build/vet/test se ejecutan en cada uno.
+MODULES := backend/shared $(addprefix backend/microservices/,$(SERVICES))
+
 USER_PROTO_DIR := backend/microservices/user-service/proto
 LIBRARY_PROTO_DIR := backend/microservices/library-service/proto
 INTERACTION_PROTO_DIR := backend/microservices/interaction-service/proto
 GATEWAY_PROTO_DIR := gateway/proto
 
-.PHONY: proto proto-descriptor up down logs
+.PHONY: proto proto-descriptor check-descriptor build vet test check smoke up down logs
 
 # Regenera los stubs de todos los servicios.
 proto:
@@ -36,8 +40,42 @@ proto-descriptor:
 		--descriptor_set_out=$(GATEWAY_PROTO_DIR)/services.pb \
 		user/v1/user.proto library/v1/library.proto interaction/v1/interaction.proto
 
+# Comprueba que el descriptor de arriba está al día con los .proto. No hace
+# falta protoc: mira que cada rpc, mensaje y campo esté dentro del descriptor.
+check-descriptor:
+	@bash scripts/check-descriptor.sh
+
+build:
+	@for m in $(MODULES); do \
+		echo "==> $$m"; \
+		(cd $$m && go build ./...) || exit 1; \
+	done
+
+vet:
+	@for m in $(MODULES); do \
+		echo "==> $$m"; \
+		(cd $$m && go vet ./...) || exit 1; \
+	done
+
+# Las pruebas que no necesitan nada levantado. Las de repositorio se saltan
+# solas si no hay base configurada; para incluirlas está el `test-integration`
+# del Makefile de cada servicio.
+test:
+	@for m in $(MODULES); do \
+		echo "==> $$m"; \
+		(cd $$m && go test ./... -count=1) || exit 1; \
+	done
+
+# Todo lo que el CI exige antes de mezclar.
+check: build vet test check-descriptor
+
+# Prueba de humo contra el entorno ya levantado: recorre el camino real de una
+# petición cruzando los tres servicios y el gateway.
+smoke:
+	@bash scripts/smoke-test.sh
+
 up:
-	docker compose up -d --build
+	docker compose up -d --build --wait
 
 down:
 	docker compose down

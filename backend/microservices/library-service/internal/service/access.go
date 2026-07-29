@@ -22,7 +22,7 @@ const (
 func (s *LibraryService) ownedBook(ctx context.Context, bookID, callerID string) (*domain.Book, error) {
 	book, err := s.books.GetByID(ctx, bookID)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load book")
+		return nil, mapRepoErr(ctx, err, "failed to load book")
 	}
 	if book.AuthorID != callerID {
 		return nil, status.Error(codes.PermissionDenied, "only the author can modify this book")
@@ -55,7 +55,7 @@ func (s *LibraryService) requireOwnedBook(ctx context.Context, field, bookID str
 func (s *LibraryService) ownedSaga(ctx context.Context, sagaID, callerID string) (*domain.Saga, error) {
 	saga, err := s.sagas.GetByID(ctx, sagaID)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to load saga")
+		return nil, mapRepoErr(ctx, err, "failed to load saga")
 	}
 	if saga.AuthorID != callerID {
 		return nil, status.Error(codes.PermissionDenied, "only the author can modify this saga")
@@ -86,7 +86,7 @@ func (s *LibraryService) requireOwnedSaga(ctx context.Context, field, sagaID str
 func (s *LibraryService) visibleBook(ctx context.Context, bookID, callerID string) (*domain.Book, bool, error) {
 	book, err := s.books.GetByID(ctx, bookID)
 	if err != nil {
-		return nil, false, mapRepoErr(err, "failed to load book")
+		return nil, false, mapRepoErr(ctx, err, "failed to load book")
 	}
 
 	isAuthor := callerID != "" && book.AuthorID == callerID
@@ -136,7 +136,7 @@ func requirePublishableChapter(book *domain.Book, chapterStatus string) error {
 func (s *LibraryService) chapterCount(ctx context.Context, bookID string) (int, error) {
 	n, err := s.chapters.CountByBook(ctx, bookID)
 	if err != nil {
-		return 0, mapRepoErr(err, "failed to count chapters")
+		return 0, mapRepoErr(ctx, err, "failed to count chapters")
 	}
 	return n, nil
 }

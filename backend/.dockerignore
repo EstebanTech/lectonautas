@@ -1,0 +1,15 @@
+# El contexto de build de los tres servicios es backend/ y no la carpeta del
+# servicio: el go.mod de cada uno apunta al modulo compartido con un replace
+# relativo (../../shared), asi que shared/ tiene que estar dentro del contexto.
+# Por eso este .dockerignore es uno solo aqui, en vez de uno por servicio.
+#
+# Nada de esto debe entrar a la imagen: la config llega por variables de
+# entorno inyectadas por el compose.
+.env
+*.env
+bin/
+*.log
+.claude
+
+# Los tests y sus dobles no se compilan en la imagen final.
+**/*_test.go

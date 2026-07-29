@@ -17,9 +17,11 @@ package events
 import (
 	"context"
 	"encoding/json"
-	"log"
+	"log/slog"
 
 	"github.com/redis/go-redis/v9"
+
+	"github.com/EstebanTech/lectonautas/backend/shared/logx"
 )
 
 // channel es uno solo para todos los libros, no uno por libro. Cada instancia
@@ -101,11 +103,13 @@ func NewBus(rdb *redis.Client) *Bus {
 func (b *Bus) Publish(ctx context.Context, evt Event) {
 	payload, err := json.Marshal(evt)
 	if err != nil {
-		log.Printf("event marshal failed: %v", err)
+		logx.From(ctx).Error("event marshal failed", slog.String("error", err.Error()))
 		return
 	}
 	if err := b.rdb.Publish(ctx, channel, payload).Err(); err != nil {
-		log.Printf("event publish failed: %v", err)
+		logx.From(ctx).Error("event publish failed",
+			slog.String("type", evt.Type),
+			slog.String("error", err.Error()))
 	}
 }
 
@@ -126,7 +130,9 @@ func (b *Bus) Subscribe(ctx context.Context) <-chan Event {
 		for msg := range sub.Channel() {
 			var evt Event
 			if err := json.Unmarshal([]byte(msg.Payload), &evt); err != nil {
-				log.Printf("event unmarshal failed: %v", err)
+				// Sin id de peticion: esto corre en la goroutine de la
+				// suscripcion, que no pertenece a ninguna peticion concreta.
+				slog.Error("event unmarshal failed", slog.String("error", err.Error()))
 				continue
 			}
 			select {

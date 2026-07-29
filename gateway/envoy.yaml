@@ -38,43 +38,113 @@ static_resources:
                         # Los filtros cors y ratelimit resuelven la ruta ANTES de
                         # que grpc_json_transcoder reescriba :path a la forma gRPC
                         # (corren antes que él en la cadena), así que ven siempre
-                        # el path REST original. Por eso esta ruta cubre tanto el
+                        # el path REST original. Por eso estas rutas cubren tanto el
                         # preflight OPTIONS como las llamadas reales, y es aquí
                         # donde va el rate limiting (habla con el ratelimit-service,
                         # que guarda los contadores en Valkey).
-                        - match: { prefix: "/v1/users" }
+                        #
+                        # Cada ruta declara además su CLASE con un generic_key, y
+                        # el límite se define por clase en
+                        # gateway/ratelimit/config/gateway.yaml. Sin esa clase todo
+                        # el tráfico compartía un único presupuesto, y un intento
+                        # de login costaba lo mismo que leer el catálogo de
+                        # géneros. La IP viaja como segunda entrada del
+                        # descriptor, así que el límite sigue siendo por cliente
+                        # dentro de su clase.
+                        #
+                        # Login va con su propia clase y en `path` exacto, antes
+                        # del prefijo /v1/auth: es el único endpoint donde cada
+                        # petición es un intento de adivinar una credencial.
+                        - match: { path: "/v1/auth/login" }
                           route:
                             cluster: user_service
                             rate_limits:
                               - actions:
+                                  - generic_key:
+                                      descriptor_key: route
+                                      descriptor_value: auth
                                   - remote_address: {}
-                        # Endpoints de autenticacion (login / me / logout).
+                        # El resto de autenticacion (me / logout) y el CRUD de
+                        # usuarios: sin clase propia, van al presupuesto general.
                         - match: { prefix: "/v1/auth" }
                           route:
                             cluster: user_service
                             rate_limits:
                               - actions:
+                                  - generic_key:
+                                      descriptor_key: route
+                                      descriptor_value: default
                                   - remote_address: {}
-                        # Libros, con sus capítulos y sus géneros anidados bajo
-                        # el libro, y sagas.
+                        - match: { prefix: "/v1/users" }
+                          route:
+                            cluster: user_service
+                            rate_limits:
+                              - actions:
+                                  - generic_key:
+                                      descriptor_key: route
+                                      descriptor_value: default
+                                  - remote_address: {}
+                        # Libros y sagas, con capítulos, géneros e interacciones
+                        # anidados bajo el libro. Se parten en dos por método: un
+                        # lector navegando encadena muchos GET seguidos y todos
+                        # salen del cache, mientras que las escrituras siguen con
+                        # el presupuesto estrecho. El match por :method va primero;
+                        # lo que no sea GET cae en la ruta de abajo.
+                        - match:
+                            prefix: "/v1/books"
+                            headers:
+                              - name: ":method"
+                                string_match: { exact: "GET" }
+                          route:
+                            cluster: library_service
+                            rate_limits:
+                              - actions:
+                                  - generic_key:
+                                      descriptor_key: route
+                                      descriptor_value: read
+                                  - remote_address: {}
                         - match: { prefix: "/v1/books" }
                           route:
                             cluster: library_service
                             rate_limits:
                               - actions:
+                                  - generic_key:
+                                      descriptor_key: route
+                                      descriptor_value: default
+                                  - remote_address: {}
+                        - match:
+                            prefix: "/v1/sagas"
+                            headers:
+                              - name: ":method"
+                                string_match: { exact: "GET" }
+                          route:
+                            cluster: library_service
+                            rate_limits:
+                              - actions:
+                                  - generic_key:
+                                      descriptor_key: route
+                                      descriptor_value: read
                                   - remote_address: {}
                         - match: { prefix: "/v1/sagas" }
                           route:
                             cluster: library_service
                             rate_limits:
                               - actions:
+                                  - generic_key:
+                                      descriptor_key: route
+                                      descriptor_value: default
                                   - remote_address: {}
-                        # Catálogo de géneros: lista fija y pública.
+                        # Catálogo de géneros: lista fija, pública y cacheada. Es
+                        # de solo lectura, así que no hace falta partirla por
+                        # método.
                         - match: { prefix: "/v1/genres" }
                           route:
                             cluster: library_service
                             rate_limits:
                               - actions:
+                                  - generic_key:
+                                      descriptor_key: route
+                                      descriptor_value: catalog
                                   - remote_address: {}
                         # WebSocket de interacciones en tiempo real. Va ANTES de
                         # cualquier otra cosa que pudiera capturarlo y tiene tres
@@ -107,8 +177,14 @@ static_resources:
                             upgrade_configs:
                               - upgrade_type: websocket
                                 enabled: true
+                            # Lo que se limita aquí es abrir la conexión, no lo
+                            # que viaja después: una vez hecho el upgrade, el
+                            # tráfico ya no vuelve a pasar por el filtro.
                             rate_limits:
                               - actions:
+                                  - generic_key:
+                                      descriptor_key: route
+                                      descriptor_value: ws
                                   - remote_address: {}
                           typed_per_filter_config:
                             envoy.filters.http.grpc_json_transcoder:

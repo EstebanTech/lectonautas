@@ -45,13 +45,22 @@ al cliente y lo traduce a gRPC.
 
 ```
 lectonautas/
-├── backend/microservices/
-│   ├── user-service/          # Usuarios, login y sesiones
-│   ├── library-service/       # Libros, capítulos, sagas y géneros
-│   └── interaction-service/   # Me gusta, comentarios y calificaciones (+ WebSocket)
-├── gateway/                   # Config de Envoy y rate limiting
+├── backend/
+│   ├── microservices/
+│   │   ├── user-service/          # Usuarios, login y sesiones
+│   │   ├── library-service/       # Libros, capítulos, sagas y géneros
+│   │   └── interaction-service/   # Me gusta, comentarios y calificaciones (+ WebSocket)
+│   └── shared/                    # Infraestructura común: sin dominio dentro
+├── gateway/                       # Config de Envoy y rate limiting
+├── scripts/                       # Prueba de humo y chequeo del descriptor
 └── docker-compose.yml
 ```
+
+Cada servicio es un módulo Go independiente y `backend/shared` es un cuarto
+módulo que los tres usan con un `replace` relativo. Ahí vive **solo lo que no
+sabe nada del dominio**: el `.env` global, el pool de Postgres, el cliente de
+Valkey con su cache versionado, los interceptores gRPC y el logging. Si algo de
+ahí necesitara saber qué es un libro, no es de ahí.
 
 ## Requisitos
 
@@ -76,8 +85,25 @@ docker compose up -d --build
 
 El primer comando solo hace falta la primera vez. `.env.example` trae valores por
 defecto que funcionan en local, y las migraciones de la base de datos **se aplican
-solas** al arrancar con el servicio `user-migrate`, así que no hay pasos manuales.
-Cuando los contenedores estén arriba, la API queda en `http://localhost:8080`.
+solas** al arrancar, así que no hay pasos manuales. Cuando los contenedores estén
+arriba, la API queda en `http://localhost:8080`.
+
+Los tres servicios exponen el **health check de gRPC** y el compose los encadena
+con `service_healthy`: el gateway no arranca hasta que los tres responden de
+verdad, no solo hasta que sus contenedores existen. Con `--wait`, el comando de
+arriba no vuelve hasta que todo está listo:
+
+```bash
+docker compose up -d --build --wait
+```
+
+Para comprobar que quedó bien, hay una prueba de humo que recorre el camino
+completo —crear cuenta, publicar un libro, interactuar con él— cruzando los tres
+servicios:
+
+```bash
+bash scripts/smoke-test.sh
+```
 
 Servicios y puertos:
 
@@ -260,26 +286,84 @@ Cuando algo desaparece, su servicio dueño lo avisa por gRPC:
   se lleva por delante.
 
 Las dos RPC de limpieza no tienen ruta HTTP y quedan bloqueadas en el gateway,
-igual que `ValidateSession`.
+igual que `ValidateSession`. Pero el gateway solo cubre a quien entra por la
+puerta: dentro de la red cualquiera podría llamarlas, y su única credencial
+sería un id que además es público. Por eso además exigen un **secreto compartido**
+(`INTERNAL_SERVICE_TOKEN`) que viaja como metadata gRPC en las llamadas entre
+servicios. Sin él responden `NotFound`, la misma respuesta que da el gateway:
+desde fuera no hay forma de saber que existen.
+
+No tiene valor por defecto en el código a propósito. Si falta, los servicios no
+arrancan —es preferible a arrancar pareciendo protegidos sin estarlo.
+
+## Cómo se observa
+
+Los tres servicios escriben **log estructurado en JSON** (nivel por `LOG_LEVEL`)
+y cada línea lleva el `request_id` de la petición que la produjo. El id lo genera
+Envoy, viaja a los vecinos en cada llamada gRPC y vuelve al cliente en la
+cabecera `x-request-id`, así que una petición se sigue entera aunque cruce los
+tres servicios:
+
+```json
+{"level":"INFO","msg":"request ok","service":"interaction-service","request_id":"1ed2bd33…","method":"/interaction.v1.InteractionService/CreateComment"}
+{"level":"INFO","msg":"request ok","service":"library-service","request_id":"1ed2bd33…","method":"/library.v1.LibraryService/GetBook"}
+{"level":"INFO","msg":"request ok","service":"user-service","request_id":"1ed2bd33…","method":"/user.v1.UserService/ValidateSession"}
+```
+
+Un comentario, tres servicios, un solo hilo del que tirar.
+
+## Migraciones
+
+Cada base tiene una tabla `public.schema_migrations` con lo que ya se aplicó, y
+el migrador del compose corre **solo lo que falta**. Antes reejecutaba todos los
+`*.up.sql` en cada arranque y la idempotencia se sostenía a mano (`IF NOT EXISTS`,
+`ON CONFLICT`, `WHERE ... IS NULL`); funcionaba, pero convertía cualquier
+migración no reejecutable —un `DROP COLUMN`, un backfill que no se puede
+repetir— en una rotura silenciosa.
+
+Cada archivo va en una sola transacción junto con su registro: si falla a la
+mitad, no queda ni el cambio a medias ni la marca de aplicada.
+
+## Verificación
+
+`make` no es imprescindible; entre paréntesis va el comando directo.
+
+| Qué | Comando |
+|---|---|
+| Compilar, vet y tests de los cuatro módulos | `make check` |
+| Tests de un módulo | `cd backend/microservices/<servicio> && go test ./... -count=1` |
+| Tests contra Postgres real | `make -C backend/microservices/<servicio> test-integration` |
+| Descriptor del gateway al día | `bash scripts/check-descriptor.sh` |
+| Prueba de humo end-to-end | `bash scripts/smoke-test.sh` |
+
+El CI (`.github/workflows/ci.yml`) corre los cuatro módulos en paralelo con
+`gofmt`, `go vet` y los tests bajo `-race`, comprueba el descriptor y además
+levanta el entorno completo con `docker compose --wait` para pasarle la prueba
+de humo. Eso último es lo que atrapa lo que ningún test unitario ve: que las
+imágenes compilan, que las migraciones corren y que el encadenado del compose
+termina.
 
 ## Estado
 
 - `user-service`: CRUD de usuarios más login y sesiones con tabla `session` y
-  Valkey. 72 casos de prueba: validación, CRUD, cache-aside e invalidación con
-  dobles en memoria (`make test`), más las reglas de vigencia de la sesión
-  contra Postgres real (`make test-integration`).
-- `library-service`: libros, capítulos, sagas y géneros. 131 casos de prueba:
-  las reglas de visibilidad y propiedad con dobles en memoria (`make test`), más
-  las de repositorio contra Postgres real —transacciones, CASCADE, los UNIQUE
-  del esquema y el tope de géneros por libro— con `make test-integration`. Estas
-  últimas se saltan solas si no hay base configurada.
+  Valkey. Validación, CRUD, cache-aside e invalidación con dobles en memoria,
+  más las reglas de vigencia de la sesión contra Postgres real
+  (`test-integration`).
+- `library-service`: libros, capítulos, sagas y géneros. Las reglas de
+  visibilidad y propiedad con dobles en memoria, más las de repositorio contra
+  Postgres real —transacciones, CASCADE, los UNIQUE del esquema y el tope de
+  géneros por libro—. Estas últimas se saltan solas si no hay base configurada.
 - `interaction-service`: me gusta, comentarios y calificaciones, con avisos en
-  vivo por WebSocket. 68 casos de prueba: las reglas de idempotencia, permisos y
-  validación con dobles en memoria, el hub de suscripciones bajo `-race`
-  (`make test`), y contra Postgres real el upsert, el `ON CONFLICT`, el CHECK del
-  rango 1..5 y las transacciones de limpieza (`make test-integration`).
-- Gateway probado end-to-end: transcoding, CORS, rate limiting a 80 req/min por
-  IP y upgrade a WebSocket.
+  vivo por WebSocket. Las reglas de idempotencia, permisos y validación con
+  dobles en memoria, el hub de suscripciones bajo `-race`, y contra Postgres
+  real el upsert, el `ON CONFLICT`, el CHECK del rango 1..5 y las transacciones
+  de limpieza.
+- `backend/shared`: el control de acceso de las llamadas entre servicios y la
+  propagación del id de petición, que es donde un fallo abierto no se notaría
+  hasta que alguien lo usara.
+- Gateway probado end-to-end: transcoding, CORS, upgrade a WebSocket y rate
+  limiting por clase de ruta —10/min el login, 200/min las lecturas, 300/min el
+  catálogo de géneros, 80/min todo lo demás—, todo por IP.
 - Fuera de alcance por ahora: **leer más tarde**, la otra mitad de la biblioteca
   del lector que salió de `library-service`. No es una interacción con la obra
   ajena sino una lista privada de lectura, así que no encaja en

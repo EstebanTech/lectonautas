@@ -2,7 +2,7 @@ package service
 
 import (
 	"context"
-	"log"
+	"log/slog"
 
 	"golang.org/x/crypto/bcrypt"
 	"google.golang.org/grpc/codes"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/EstebanTech/lectonautas/backend/microservices/user-service/internal/domain"
 	userv1 "github.com/EstebanTech/lectonautas/backend/microservices/user-service/proto/user/v1"
+	"github.com/EstebanTech/lectonautas/backend/shared/logx"
 )
 
 func (s *UserService) CreateUser(ctx context.Context, req *userv1.CreateUserRequest) (*userv1.UserResponse, error) {
@@ -54,11 +55,11 @@ func (s *UserService) CreateUser(ctx context.Context, req *userv1.CreateUserRequ
 		Bio:         bio,
 	})
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to create user")
+		return nil, mapRepoErr(ctx, err, "failed to create user")
 	}
 
 	// El listado completo quedo viejo: le falta este usuario.
-	s.users.forgetAll(ctx)
+	s.users.Invalidate(ctx)
 
 	return &userv1.UserResponse{User: toProto(created)}, nil
 }
@@ -83,13 +84,16 @@ func (s *UserService) GetUser(ctx context.Context, req *userv1.GetUserRequest) (
 // GetAllUsers devuelve todos los usuarios, sin paginacion ni filtros. Tambien
 // va por cache-aside: la respuesta completa vive en una sola clave de Valkey.
 func (s *UserService) GetAllUsers(ctx context.Context, _ *userv1.GetAllUsersRequest) (*userv1.GetAllUsersResponse, error) {
-	users, hit := s.users.all(ctx)
+	var cached []cachedUser
+	key, hit := s.users.Get(ctx, &cached, userKeyPart, allUsersKeyPart)
+
+	users := fromCachedList(cached)
 	if !hit {
 		var err error
 		if users, err = s.repo.GetAll(ctx); err != nil {
 			return nil, status.Error(codes.Internal, "failed to get users")
 		}
-		s.users.storeAll(ctx, users)
+		s.users.Set(ctx, key, toCachedList(users))
 	}
 
 	// Perfiles publicos: este listado tampoco pide token.
@@ -118,10 +122,10 @@ func (s *UserService) UpdateUser(ctx context.Context, req *userv1.UpdateUserRequ
 
 	updated, err := s.repo.Update(ctx, upd)
 	if err != nil {
-		return nil, mapRepoErr(err, "failed to update user")
+		return nil, mapRepoErr(ctx, err, "failed to update user")
 	}
 
-	s.users.forgetUser(ctx, updated.ID)
+	s.users.Invalidate(ctx)
 
 	return &userv1.UserResponse{User: toProto(updated)}, nil
 }
@@ -192,7 +196,7 @@ func (s *UserService) DeleteUser(ctx context.Context, req *userv1.DeleteUserRequ
 	// puede borrar.
 	staleSessions, err := s.sessions.TokenHashesByUser(ctx, req.GetId())
 	if err != nil {
-		log.Printf("list user sessions failed: %v", err)
+		logx.From(ctx).Error("list user sessions failed", slog.String("error", err.Error()))
 	}
 
 	// Los dos vecinos van ANTES de borrar la fila del usuario, y un fallo
@@ -200,29 +204,32 @@ func (s *UserService) DeleteUser(ctx context.Context, req *userv1.DeleteUserRequ
 	// si se borrara primero el usuario, su id se perderia y ya no habria con
 	// que pedir la limpieza de lo que dejo en las otras bases.
 	if err := s.content.DeleteAuthorContent(ctx, req.GetId()); err != nil {
-		log.Printf("delete author content failed: %v", err)
+		logx.From(ctx).Error("delete author content failed", slog.String("error", err.Error()))
 		return nil, status.Error(codes.Internal, "failed to delete the account content")
 	}
 
 	if err := s.interactions.DeleteUserInteractions(ctx, req.GetId()); err != nil {
-		log.Printf("delete user interactions failed: %v", err)
+		logx.From(ctx).Error("delete user interactions failed", slog.String("error", err.Error()))
 		return nil, status.Error(codes.Internal, "failed to delete the account content")
 	}
 
 	if err := s.repo.Delete(ctx, req.GetId()); err != nil {
-		return nil, mapRepoErr(err, "failed to delete user")
+		return nil, mapRepoErr(ctx, err, "failed to delete user")
 	}
 
-	// La cuenta ya no existe: sus tokens no pueden seguir abriendo nada.
+	// La cuenta ya no existe: sus tokens no pueden seguir abriendo nada. Esto
+	// se borra por clave y no por version, porque es revocacion y no frescura:
+	// tiene que caer esta sesion, no el cache entero.
 	for _, hash := range staleSessions {
 		if err := s.cache.Delete(ctx, hash); err != nil {
-			log.Printf("session cache delete failed: %v", err)
+			logx.From(ctx).Error("session cache delete failed", slog.String("error", err.Error()))
 		}
 	}
 
-	s.users.forgetUser(ctx, req.GetId())
-	// El listado completo quedo viejo: le sobra este usuario.
-	s.users.forgetAll(ctx)
+	// Una sola invalidacion se lleva por delante tanto la entrada del usuario
+	// como el listado completo, que tambien quedo viejo: es la ventaja del
+	// contador de version frente a acordarse de cada clave afectada.
+	s.users.Invalidate(ctx)
 
 	return &userv1.DeleteUserResponse{Success: true}, nil
 }

@@ -1,50 +1,33 @@
 package server
 
 import (
-	"context"
-	"log"
-	"runtime/debug"
-
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/reflection"
-	"google.golang.org/grpc/status"
 
 	interactionv1 "github.com/EstebanTech/lectonautas/backend/microservices/interaction-service/proto/interaction/v1"
+	"github.com/EstebanTech/lectonautas/backend/shared/grpcx"
 )
 
-func NewGRPCServer(interactionService interactionv1.InteractionServiceServer) *grpc.Server {
-	s := grpc.NewServer(
-		// recovery va primero para envolver al resto: si un handler hace panic,
-		// lo atrapa antes de que tumbe el proceso.
-		grpc.ChainUnaryInterceptor(recoveryInterceptor, loggingInterceptor),
-	)
+// internalMethods son los que solo puede llamar otro servicio: los dos borrados
+// masivos que disparan user-service (baja de cuenta) y library-service (borrado
+// de libro). Desde fuera serian un borrado masivo con un solo id por credencial,
+// y tanto el user_id como el book_id son publicos.
+//
+// Estan tambien bloqueados en el gateway, pero eso solo cubre a quien entra por
+// la puerta; esto cubre a cualquiera que ya este dentro de la red.
+var internalMethods = []string{
+	interactionv1.InteractionService_DeleteUserInteractions_FullMethodName,
+	interactionv1.InteractionService_DeleteBookInteractions_FullMethodName,
+}
+
+func NewGRPCServer(interactionService interactionv1.InteractionServiceServer, internalSecret string) *grpc.Server {
+	s := grpcx.NewServer(grpcx.ServerConfig{
+		Service:         "interaction-service",
+		InternalSecret:  internalSecret,
+		InternalMethods: internalMethods,
+	})
 
 	interactionv1.RegisterInteractionServiceServer(s, interactionService)
-	reflection.Register(s)
+	grpcx.RegisterHealth(s)
 
 	return s
-}
-
-// recoveryInterceptor evita que un panic en un handler tire abajo todo el
-// servidor: lo captura, deja el detalle con su stack en el log y responde un
-// error gRPC normal (Internal) en vez de matar el proceso.
-func recoveryInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (resp interface{}, err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			log.Printf("method=%s panic=%v\n%s", info.FullMethod, r, debug.Stack())
-			err = status.Error(codes.Internal, "internal error")
-		}
-	}()
-	return handler(ctx, req)
-}
-
-func loggingInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	resp, err := handler(ctx, req)
-	if err != nil {
-		log.Printf("method=%s error=%v", info.FullMethod, err)
-		return resp, err
-	}
-	log.Printf("method=%s status=ok", info.FullMethod)
-	return resp, err
 }
