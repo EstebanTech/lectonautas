@@ -9,7 +9,6 @@
 *.env
 bin/
 *.log
-.claude
 
 # Los tests y sus dobles no se compilan en la imagen final.
 **/*_test.go
