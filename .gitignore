@@ -7,7 +7,9 @@
 bin/
 *.log
 
-# Configuración local de Claude Code: sesiones y ajustes de esta máquina.
-# CLAUDE.md NO va aquí: son las convenciones del repo y se versionan, igual que
-# la colección de Postman, que es la documentación ejecutable de la API.
+# Configuración local de Claude Code
 .claude
+CLAUDE.md
+
+# Collección Postman
+lectonautas.postman_collection.json
