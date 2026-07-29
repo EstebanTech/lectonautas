@@ -1,0 +1,96 @@
+# Lo que tiene que estar verde antes de mezclar nada.
+#
+# Los tres servicios y el módulo compartido son módulos Go distintos, así que
+# cada uno se compila y se prueba por su cuenta. Van en paralelo (matrix)
+# porque no dependen entre sí para compilar: el replace a ../../shared es una
+# ruta del propio repo, no un artefacto que haya que publicar antes.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  go:
+    name: ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    strategy:
+      # Que falle uno no cancela a los demás: interesa ver todo lo que está
+      # roto de una vez, no el primero que se cayó.
+      fail-fast: false
+      matrix:
+        module:
+          - backend/shared
+          - backend/microservices/user-service
+          - backend/microservices/library-service
+          - backend/microservices/interaction-service
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache-dependency-path: ${{ matrix.module }}/go.sum
+
+      - name: gofmt
+        working-directory: ${{ matrix.module }}
+        # gofmt -l lista los archivos mal formateados; si lista algo, falla.
+        run: |
+          sin_formato=$(gofmt -l .)
+          if [ -n "$sin_formato" ]; then
+            echo "Archivos sin gofmt:"
+            echo "$sin_formato"
+            exit 1
+          fi
+
+      - name: build
+        working-directory: ${{ matrix.module }}
+        run: go build ./...
+
+      - name: vet
+        working-directory: ${{ matrix.module }}
+        run: go vet ./...
+
+      - name: test
+        working-directory: ${{ matrix.module }}
+        # -race porque hay concurrencia de verdad que probar: el hub de
+        # WebSocket reparte eventos entre suscriptores, y la baja de cuenta
+        # pide limpiezas en paralelo.
+        run: go test ./... -race -count=1
+
+  descriptor:
+    name: descriptor del gateway
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # El descriptor es un binario versionado que se regenera a mano; sin esto
+      # se olvida, y el síntoma es un 404 del gateway sin explicación.
+      - run: bash scripts/check-descriptor.sh
+
+  compose:
+    name: entorno completo
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: preparar .env
+        run: cp .env.example .env
+
+      # Levanta el sistema entero y espera a que los tres servicios estén
+      # healthy. Es lo que prueba lo que los tests unitarios no pueden: que las
+      # imágenes compilan con el módulo compartido dentro del contexto, que las
+      # migraciones corren y que el encadenado del compose termina.
+      - name: docker compose up
+        run: docker compose up -d --build --wait --wait-timeout 300
+
+      - name: prueba de humo
+        run: bash scripts/smoke-test.sh
+
+      - name: logs si algo falló
+        if: failure()
+        run: docker compose logs --tail 100
+
+      - name: bajar el entorno
+        if: always()
+        run: docker compose down -v
